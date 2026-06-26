@@ -157,7 +157,7 @@ const docTemplate = `{
         },
         "/api/status": {
             "get": {
-                "description": "Returns whether the Minecraft server is currently running",
+                "description": "Returns whether the Minecraft server is running, plus its PID, start time and uptime (seconds) while it is up",
                 "produces": [
                     "application/json"
                 ],

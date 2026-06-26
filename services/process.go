@@ -22,6 +22,9 @@ var (
 	logHub      *types.LogHub
 	serverDone  chan struct{} // closed once the process has exited and state is cleared
 
+	// serverStartedAt is the wall-clock time the current process was started.
+	serverStartedAt time.Time
+
 	// stdinMu serializes concurrent writes to the server's stdin.
 	stdinMu sync.Mutex
 )
@@ -61,6 +64,7 @@ func StartServerProcess() (string, error) {
 	serverStdin = stdin
 	logHub = hub
 	serverDone = done
+	serverStartedAt = time.Now()
 	mu.Unlock()
 
 	// Pump stdout into the log hub and detect readiness.
@@ -99,6 +103,7 @@ func StartServerProcess() (string, error) {
 		serverStdin = nil
 		logHub = nil
 		serverDone = nil
+		serverStartedAt = time.Time{}
 		mu.Unlock()
 		close(done)
 	}()
@@ -149,6 +154,17 @@ func IsServerRunning() bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	return serverCmd != nil
+}
+
+// ServerInfo reports whether the server is running and, if so, its OS process
+// id and the time it was started.
+func ServerInfo() (running bool, pid int, startedAt time.Time) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if serverCmd == nil || serverCmd.Process == nil {
+		return false, 0, time.Time{}
+	}
+	return true, serverCmd.Process.Pid, serverStartedAt
 }
 
 func SendCommand(cmd string) error {

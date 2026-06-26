@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lomokwa/mc-manager/services"
@@ -182,12 +183,21 @@ func StopServerHandler(c *gin.Context) {
 }
 
 // @Summary Get server status
-// @Description Returns whether the Minecraft server is currently running
+// @Description Returns whether the Minecraft server is running, plus its PID, start time and uptime (seconds) while it is up
 // @Tags server
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/status [get]
 func StatusHandler(c *gin.Context) {
 	log.Printf("status request received")
-	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: gin.H{"running": services.IsServerRunning()}})
+
+	running, pid, startedAt := services.ServerInfo()
+	data := gin.H{"running": running}
+	if running {
+		data["pid"] = pid
+		data["started_at"] = startedAt.UTC().Format(time.RFC3339)
+		data["uptime_seconds"] = int(time.Since(startedAt).Seconds())
+	}
+
+	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: data})
 }

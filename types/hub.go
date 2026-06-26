@@ -53,6 +53,16 @@ func (lh *LogHub) Broadcast(line string) {
 	lh.mu.Unlock()
 }
 
+// Snapshot returns a copy of the buffered log lines (oldest first, up to
+// replayBufferSize). Safe to call without subscribing.
+func (lh *LogHub) Snapshot() []string {
+	lh.mu.RLock()
+	defer lh.mu.RUnlock()
+	out := make([]string, len(lh.buffer))
+	copy(out, lh.buffer)
+	return out
+}
+
 func (lh *LogHub) Close() {
 	lh.mu.Lock()
 	for ch := range lh.subscribers {

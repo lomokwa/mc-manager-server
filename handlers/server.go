@@ -191,3 +191,20 @@ func StatusHandler(c *gin.Context) {
 	log.Printf("status request received")
 	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: gin.H{"running": services.IsServerRunning()}})
 }
+
+// @Summary Get recent server logs
+// @Description Returns the most recent buffered console output (oldest line first, up to the replay buffer size). Empty when the server is not running. For a live stream use the /api/console WebSocket.
+// @Tags server
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/logs [get]
+func LogsHandler(c *gin.Context) {
+	log.Printf("logs request received")
+
+	lines := []string{}
+	if hub := services.GetLogHub(); hub != nil {
+		lines = hub.Snapshot()
+	}
+
+	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: gin.H{"lines": lines}})
+}

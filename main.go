@@ -74,6 +74,9 @@ func main() {
 	// Server Health check
 	api.GET("/status", handlers.StatusHandler)
 
+	// Recent buffered logs (REST snapshot; live stream is /api/console)
+	api.GET("/logs", handlers.LogsHandler)
+
 	// Serve API Docs
 	r.GET("/api/docs/*any", func(c *gin.Context) {
 		if c.Param("any") == "/" || c.Param("any") == "" {

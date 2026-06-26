@@ -9,6 +9,13 @@ import (
 	"github.com/lomokwa/mc-manager/types"
 )
 
+// @Summary List players
+// @Description Returns known players from the server's usercache, each annotated with op / banned / whitelisted / online status
+// @Tags server
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/players [get]
 func ListPlayersHandler(c *gin.Context) {
 	log.Printf("list players request received")
 	players, err := services.ListPlayers()

@@ -55,6 +55,7 @@ func main() {
 	api.POST("/start", handlers.StartServerHandler)
 	api.POST("/stop", handlers.StopServerHandler)
 	api.GET("/players", handlers.ListPlayersHandler)
+	api.GET("/world", handlers.GetWorldHandler)
 	api.GET("/properties", handlers.GetServerPropertiesHandler)
 	api.PATCH("/properties", handlers.UpdateServerPropertiesHandler)
 	api.GET("/users", handlers.GetUsersHandler)

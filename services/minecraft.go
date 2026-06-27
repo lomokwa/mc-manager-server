@@ -317,16 +317,34 @@ func ListPlayers() ([]types.Player, error) {
 		}
 	}
 
+	worldDir := filepath.Join(ServerDir, getLevelName())
+
 	players := make([]types.Player, 0, len(userCache))
 	for _, u := range userCache {
-		players = append(players, types.Player{
+		p := types.Player{
 			UUID:          u.UUID,
 			Name:          u.Name,
 			Online:        onlineSet[u.Name],
 			IsOp:          opSet[u.UUID],
 			IsBanned:      bannedSet[u.UUID],
 			IsWhitelisted: whitelistSet[u.UUID],
-		})
+		}
+
+		// Enrich with lifetime stats when the world has a stats file for them.
+		if playtime, deaths, ok := readPlayerStats(worldDir, u.UUID); ok {
+			p.TotalPlaytimeTicks = &playtime
+			p.Deaths = &deaths
+		}
+
+		// For online players, attach when they joined this session.
+		if p.Online {
+			if joined, ok := sessionStart(u.Name); ok {
+				since := joined.UTC().Format(time.RFC3339)
+				p.OnlineSince = &since
+			}
+		}
+
+		players = append(players, p)
 	}
 	return players, nil
 }
@@ -396,4 +414,47 @@ func UpdateServerProperties(properties map[string]string) error {
 	}
 
 	return utils.WriteFile(filepath.Join(ServerDir, "server.properties"), []byte(content.String()))
+}
+
+// getLevelName reads the world directory name from server.properties,
+// defaulting to "world" when it can't be determined.
+func getLevelName() string {
+	data, err := os.ReadFile(filepath.Join(ServerDir, "server.properties"))
+	if err != nil {
+		return "world"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "level-name="); ok {
+			if name = strings.TrimSpace(name); name != "" {
+				return name
+			}
+		}
+	}
+	return "world"
+}
+
+// readPlayerStats reads total play time (in ticks) and death count from a
+// player's world/stats/<uuid>.json. ok is false when the file is missing or
+// unreadable, so the caller can simply omit those fields.
+func readPlayerStats(worldDir, uuid string) (playtime int64, deaths int, ok bool) {
+	data, err := os.ReadFile(filepath.Join(worldDir, "stats", uuid+".json"))
+	if err != nil {
+		return 0, 0, false
+	}
+
+	var parsed struct {
+		Stats struct {
+			Custom map[string]int64 `json:"minecraft:custom"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return 0, 0, false
+	}
+
+	pt := parsed.Stats.Custom["minecraft:play_time"]
+	if pt == 0 {
+		// Worlds from before 1.17 recorded play time under this key instead.
+		pt = parsed.Stats.Custom["minecraft:play_one_minute"]
+	}
+	return pt, int(parsed.Stats.Custom["minecraft:deaths"]), true
 }

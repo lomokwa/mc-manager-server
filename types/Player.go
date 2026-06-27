@@ -7,6 +7,13 @@ type Player struct {
 	IsOp          bool   `json:"is_op"`
 	IsBanned      bool   `json:"is_banned"`
 	IsWhitelisted bool   `json:"is_whitelisted"`
+	// Lifetime stats read from the world's stats/<uuid>.json. Pointers so they
+	// are omitted (rather than reported as 0) when the file isn't available.
+	TotalPlaytimeTicks *int64 `json:"total_playtime_ticks,omitempty"`
+	Deaths             *int   `json:"deaths,omitempty"`
+	// OnlineSince is set for online players from console join tracking; it is
+	// an RFC3339 timestamp the player joined this session.
+	OnlineSince *string `json:"online_since,omitempty"`
 }
 
 type UserCacheEntry struct {

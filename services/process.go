@@ -63,6 +63,10 @@ func StartServerProcess() (string, error) {
 	serverDone = done
 	mu.Unlock()
 
+	// Track player join/leave from the console so the API can report
+	// current-session time. Exits when the hub closes (server stops).
+	go trackSessions(hub)
+
 	// Pump stdout into the log hub and detect readiness.
 	ready := make(chan string, 1)
 	go func() {

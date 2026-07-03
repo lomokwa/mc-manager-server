@@ -48,6 +48,16 @@ func RegisterHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, types.APIResponse{Success: true})
 }
 
+func GetUsersHandler(c *gin.Context) {
+	users, err := services.GetUsers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, types.APIResponse{Success: false, Error: "failed to retrieve users"})
+		return
+	}
+
+	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: users})
+}
+
 func LoginHandler(c *gin.Context) {
 	var req types.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

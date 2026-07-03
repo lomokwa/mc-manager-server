@@ -120,3 +120,22 @@ func Login(req types.LoginRequest) (string, error) {
 
 	return tokenString, nil
 }
+
+func GetUsers() ([]types.User, error) {
+	rows, err := db.DB.Query("SELECT id, username FROM users")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []types.User
+	for rows.Next() {
+		var u types.User
+		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+
+	return users, nil
+}

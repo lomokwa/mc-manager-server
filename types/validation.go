@@ -1,6 +1,9 @@
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 var boolValues = map[string]bool{"true": true, "false": true}
 
@@ -39,6 +42,15 @@ var propertyRules = map[string]func(string) error{
 
 func ValidateServerProperties(properties map[string]string) error {
 	for key, value := range properties {
+		// server.properties is line-oriented `key=value`: a newline in a key
+		// or value would inject extra lines (e.g. enable RCON or point at a
+		// malicious resource pack), and '=' in a key corrupts the round-trip.
+		if key == "" {
+			return fmt.Errorf("property keys must not be empty")
+		}
+		if strings.ContainsAny(key, "=\r\n") || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("invalid property %q: keys must not contain '=' and keys/values must not contain newlines", key)
+		}
 		if rule, exists := propertyRules[key]; exists {
 			if err := rule(value); err != nil {
 				return fmt.Errorf("invalid value for %q: %w", key, err)

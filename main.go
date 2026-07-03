@@ -57,6 +57,7 @@ func main() {
 	api.GET("/players", handlers.ListPlayersHandler)
 	api.GET("/properties", handlers.GetServerPropertiesHandler)
 	api.PATCH("/properties", handlers.UpdateServerPropertiesHandler)
+	api.GET("/users", handlers.GetUsersHandler)
 
 	// Admin Routes (API key)
 	admin := r.Group("/api/admin", middleware.ValidateAPIKeyOrJWT())

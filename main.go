@@ -14,6 +14,7 @@ import (
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/handlers"
 	"github.com/lomokwa/mc-manager/middleware"
+	"github.com/lomokwa/mc-manager/services"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -59,6 +60,14 @@ func main() {
 	api.PATCH("/properties", handlers.UpdateServerPropertiesHandler)
 	api.GET("/users", handlers.GetUsersHandler)
 
+	// World backups
+	api.GET("/backups", handlers.ListBackupsHandler)
+	api.POST("/backups", handlers.CreateBackupHandler)
+	api.DELETE("/backups", handlers.DeleteBackupHandler)
+	api.POST("/backups/restore", handlers.RestoreBackupHandler)
+	api.GET("/backups/config", handlers.GetBackupConfigHandler)
+	api.PUT("/backups/config", handlers.UpdateBackupConfigHandler)
+
 	// Admin Routes (API key)
 	admin := r.Group("/api/admin", middleware.ValidateAPIKeyOrJWT())
 	admin.POST("/invitations", handlers.CreateInvitationHandler)
@@ -73,6 +82,9 @@ func main() {
 
 	// Server Health check
 	api.GET("/status", handlers.StatusHandler)
+
+	// Run scheduled backups when enabled in the backup config.
+	services.StartBackupScheduler()
 
 	// Serve API Docs
 	r.GET("/api/docs/*any", func(c *gin.Context) {

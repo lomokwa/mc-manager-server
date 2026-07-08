@@ -20,9 +20,15 @@ func NewLogHub() *LogHub {
 func (lh *LogHub) Subscribe() chan string {
 	ch := make(chan string, 256)
 	lh.mu.Lock()
-	// Replay buffered lines to new subscriber
+	// Replay buffered lines to the new subscriber. Non-blocking: the caller
+	// isn't reading yet, so a blocking send here would stall every other hub
+	// operation (they all take lh.mu) — and would deadlock outright if
+	// replayBufferSize ever exceeded the channel's capacity.
 	for _, line := range lh.buffer {
-		ch <- line
+		select {
+		case ch <- line:
+		default:
+		}
 	}
 	lh.subscribers[ch] = struct{}{}
 	lh.mu.Unlock()

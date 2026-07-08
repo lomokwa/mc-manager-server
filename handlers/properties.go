@@ -25,6 +25,7 @@ func UpdateServerPropertiesHandler(c *gin.Context) {
 
 	if err := types.ValidateServerProperties(req.Properties); err != nil {
 		c.JSON(400, types.APIResponse{Error: err.Error()})
+		return
 	}
 
 	err := services.UpdateServerProperties(req.Properties)

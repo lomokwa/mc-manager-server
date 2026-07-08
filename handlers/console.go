@@ -3,6 +3,8 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -11,9 +13,28 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		// TODO: restrict to allowed origins in production
-		return true
+		origin := r.Header.Get("Origin")
+		// Non-browser clients send no Origin and are allowed (auth is still
+		// required). Browsers always send Origin, so a cross-site page is
+		// rejected unless its origin is allow-listed.
+		return origin == "" || originAllowed(origin)
 	},
+}
+
+// originAllowed reports whether a browser Origin may open the console
+// WebSocket, using the same CORS_ALLOWED_ORIGINS list as the REST API
+// (defaulting to the local dev origins when it is unset).
+func originAllowed(origin string) bool {
+	raw := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if strings.TrimSpace(raw) == "" {
+		return origin == "http://localhost:5173" || origin == "http://localhost:8080"
+	}
+	for _, p := range strings.Split(raw, ",") {
+		if strings.TrimSpace(p) == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // ConsoleHandler upgrades the connection to a WebSocket and streams

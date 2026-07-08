@@ -3,9 +3,11 @@ package main
 //go:generate go run github.com/swaggo/swag/cmd/swag@latest init
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gin-contrib/cors"
@@ -33,7 +35,8 @@ func main() {
 	// Initialize database
 	db.Init(os.Getenv("DB_PATH"))
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(requestLogger(), gin.Recovery())
 
 	// Cors config
 	r.Use(cors.New(cors.Config{
@@ -103,4 +106,19 @@ func allowedOrigins() []string {
 		}
 	}
 	return origins
+}
+
+// credentialParamRe matches `key` and `token` query parameters so their
+// values can be redacted from access logs: the API key may arrive via ?key=
+// and the JWT via ?token= (WebSocket connections can't set headers).
+var credentialParamRe = regexp.MustCompile(`([?&](?:key|token)=)[^&]*`)
+
+// requestLogger is gin's access logger with credentials redacted from the
+// logged URL, so secrets never land in log files.
+func requestLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(p gin.LogFormatterParams) string {
+		path := credentialParamRe.ReplaceAllString(p.Path, "${1}REDACTED")
+		return fmt.Sprintf("[GIN] %3d | %13v | %15s | %-7s %s\n",
+			p.StatusCode, p.Latency, p.ClientIP, p.Method, path)
+	})
 }

@@ -122,7 +122,7 @@ func Login(req types.LoginRequest) (string, error) {
 }
 
 func GetUsers() ([]types.User, error) {
-	rows, err := db.DB.Query("SELECT id, username FROM users")
+	rows, err := db.DB.Query("SELECT id, username, created_at FROM users")
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func GetUsers() ([]types.User, error) {
 	var users []types.User
 	for rows.Next() {
 		var u types.User
-		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

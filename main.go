@@ -69,6 +69,7 @@ func main() {
 	api.PUT("/files", handlers.WriteFileHandler)
 	api.GET("/files/download", handlers.DownloadFileHandler)
 	api.POST("/files/upload", handlers.UploadFileHandler)
+	api.DELETE("/files", handlers.DeleteFileHandler)
 
 	// Backups
 	api.GET("/backups", handlers.ListBackupsHandler)

@@ -59,6 +59,13 @@ func main() {
 	api.PATCH("/properties", handlers.UpdateServerPropertiesHandler)
 	api.GET("/users", handlers.GetUsersHandler)
 
+	// File manager
+	api.GET("/files", handlers.ListFilesHandler)
+	api.GET("/files/read", handlers.ReadFileHandler)
+	api.PUT("/files", handlers.WriteFileHandler)
+	api.GET("/files/download", handlers.DownloadFileHandler)
+	api.POST("/files/upload", handlers.UploadFileHandler)
+
 	// Admin Routes (API key)
 	admin := r.Group("/api/admin", middleware.ValidateAPIKeyOrJWT())
 	admin.POST("/invitations", handlers.CreateInvitationHandler)

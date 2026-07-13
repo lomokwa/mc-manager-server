@@ -14,6 +14,7 @@ import (
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/handlers"
 	"github.com/lomokwa/mc-manager/middleware"
+	"github.com/lomokwa/mc-manager/services"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -32,6 +33,9 @@ func main() {
 
 	// Initialize database
 	db.Init(os.Getenv("DB_PATH"))
+
+	// Start the automatic backup scheduler
+	services.StartBackupScheduler()
 
 	r := gin.Default()
 
@@ -65,6 +69,14 @@ func main() {
 	api.PUT("/files", handlers.WriteFileHandler)
 	api.GET("/files/download", handlers.DownloadFileHandler)
 	api.POST("/files/upload", handlers.UploadFileHandler)
+
+	// Backups
+	api.GET("/backups", handlers.ListBackupsHandler)
+	api.POST("/backups", handlers.CreateBackupHandler)
+	api.DELETE("/backups", handlers.DeleteBackupHandler)
+	api.POST("/backups/restore", handlers.RestoreBackupHandler)
+	api.GET("/backups/config", handlers.GetBackupConfigHandler)
+	api.PUT("/backups/config", handlers.UpdateBackupConfigHandler)
 
 	// Admin Routes (API key)
 	admin := r.Group("/api/admin", middleware.ValidateAPIKeyOrJWT())

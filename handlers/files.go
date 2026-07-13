@@ -220,3 +220,38 @@ func UploadFileHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, types.APIResponse{Success: true})
 }
+
+// DeleteFileHandler removes a file or, recursively, a directory within the
+// server directory. safePath keeps the target inside the server dir, and the
+// server root itself is never removable.
+func DeleteFileHandler(c *gin.Context) {
+	reqPath := c.Query("path")
+
+	resolved, err := safePath(reqPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	base, err := filepath.Abs(services.ServerDir)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, types.APIResponse{Success: false, Error: "failed to resolve server directory"})
+		return
+	}
+	if resolved == base {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "refusing to delete the server root"})
+		return
+	}
+
+	if _, err := os.Stat(resolved); err != nil {
+		c.JSON(http.StatusNotFound, types.APIResponse{Success: false, Error: "path not found"})
+		return
+	}
+
+	if err := os.RemoveAll(resolved); err != nil {
+		c.JSON(http.StatusInternalServerError, types.APIResponse{Success: false, Error: "failed to delete"})
+		return
+	}
+
+	c.JSON(http.StatusOK, types.APIResponse{Success: true})
+}

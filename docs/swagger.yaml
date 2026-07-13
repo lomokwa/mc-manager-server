@@ -1,5 +1,12 @@
 basePath: /
 definitions:
+  handlers.restoreBackupRequest:
+    properties:
+      name:
+        type: string
+    required:
+    - name
+    type: object
   types.APIResponse:
     properties:
       data: {}
@@ -7,6 +14,15 @@ definitions:
         type: string
       success:
         type: boolean
+    type: object
+  types.BackupConfig:
+    properties:
+      enabled:
+        type: boolean
+      interval_minutes:
+        type: integer
+      keep:
+        type: integer
     type: object
   types.CreateServerRequest:
     properties:
@@ -34,6 +50,150 @@ info:
   title: MC Manager API
   version: "1.0"
 paths:
+  /api/backups:
+    delete:
+      description: Deletes a single backup archive by name
+      parameters:
+      - description: Backup name
+        in: query
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a backup
+      tags:
+      - backups
+    get:
+      description: Lists all backup archives, newest first
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List backups
+      tags:
+      - backups
+    post:
+      description: Creates a new backup of the world directory
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a backup
+      tags:
+      - backups
+  /api/backups/config:
+    get:
+      description: Returns the current automatic backup configuration
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the backup schedule
+      tags:
+      - backups
+    put:
+      consumes:
+      - application/json
+      description: Updates the automatic backup configuration and reloads the scheduler
+      parameters:
+      - description: Backup schedule
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/types.BackupConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Update the backup schedule
+      tags:
+      - backups
+  /api/backups/restore:
+    post:
+      consumes:
+      - application/json
+      description: Restores the world directory from a backup archive. The server
+        must be stopped first.
+      parameters:
+      - description: Backup to restore
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.restoreBackupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Restore a backup
+      tags:
+      - backups
   /api/server:
     delete:
       description: Removes the server jar and all server files

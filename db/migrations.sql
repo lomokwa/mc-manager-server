@@ -14,3 +14,11 @@ CREATE TABLE IF NOT EXISTS invitations (
   expires_at TIMESTAMP NOT NULL,
   used_at TIMESTAMP
 );
+
+-- Single-row table: there is one backup schedule per server instance.
+CREATE TABLE IF NOT EXISTS backup_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled BOOLEAN NOT NULL DEFAULT 0,
+  interval_minutes INTEGER NOT NULL DEFAULT 1440,
+  keep INTEGER NOT NULL DEFAULT 7
+);

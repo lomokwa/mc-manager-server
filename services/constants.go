@@ -74,5 +74,6 @@ pause
 `
 
 const ServerDir = "./minecraft-server"
+const BackupDir = "./backups"
 const ServerJarPath = ServerDir + "/server.jar"
 const ServerMetaPath = ServerDir + "/server-meta.json"

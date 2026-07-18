@@ -36,6 +36,7 @@ RUN go generate ./... && go build -o server .
 
 # Expose ports
 EXPOSE 8080 25565
+EXPOSE 24454/udp
 
 # Run app
 CMD ["./server"]

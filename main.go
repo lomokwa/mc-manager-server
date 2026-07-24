@@ -75,6 +75,7 @@ func main() {
 	api.GET("/backups", handlers.ListBackupsHandler)
 	api.POST("/backups", handlers.CreateBackupHandler)
 	api.DELETE("/backups", handlers.DeleteBackupHandler)
+	api.GET("/backups/download", handlers.DownloadBackupHandler)
 	api.POST("/backups/restore", handlers.RestoreBackupHandler)
 	api.GET("/backups/config", handlers.GetBackupConfigHandler)
 	api.PUT("/backups/config", handlers.UpdateBackupConfigHandler)

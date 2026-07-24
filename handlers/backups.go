@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lomokwa/mc-manager/services"
@@ -75,6 +76,32 @@ func DeleteBackupHandler(c *gin.Context) {
 
 	log.Printf("backup deleted: %s", name)
 	c.JSON(http.StatusOK, types.APIResponse{Success: true})
+}
+
+// @Summary Download a backup
+// @Description Downloads a single backup archive by name
+// @Tags backups
+// @Produce application/zip
+// @Param name query string true "Backup name"
+// @Success 200 {file} binary
+// @Failure 400 {object} types.APIResponse
+// @Failure 404 {object} types.APIResponse
+// @Security BearerAuth
+// @Router /api/backups/download [get]
+func DownloadBackupHandler(c *gin.Context) {
+	name := c.Query("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Error: "name is required"})
+		return
+	}
+
+	path, err := services.BackupFilePath(name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, types.APIResponse{Error: err.Error()})
+		return
+	}
+
+	c.FileAttachment(path, filepath.Base(path))
 }
 
 type restoreBackupRequest struct {

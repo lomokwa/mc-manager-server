@@ -17,6 +17,17 @@ services:
     init: true # tini as PID 1: forwards SIGTERM correctly, reaps zombies
     stop_grace_period: 60s # let the world save before a hard SIGKILL
     restart: unless-stopped
+    healthcheck:
+      # mc-supervisor creates control.in before it does anything else, but
+      # "container started" (plain depends_on) fires well before that -- this
+      # is what mc-manager actually needs to wait for, since a request that
+      # lands earlier fails with "server control channel unavailable: no such
+      # file or directory".
+      test: ["CMD-SHELL", "test -p /mc/.mcmanager/control.in"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
 
   mc-manager:
     build:
@@ -24,7 +35,8 @@ services:
       dockerfile: Dockerfile
     command: ["./server"]
     depends_on:
-      - minecraft
+      minecraft:
+        condition: service_healthy
     ports:
       - "8080:8080" # Go API
     volumes:

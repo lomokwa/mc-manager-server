@@ -98,6 +98,13 @@ func ConsoleHandler(c *gin.Context) {
 	pingTicker := time.NewTicker(consolePingInterval)
 	defer pingTicker.Stop()
 
+	// The log hub is now long-lived (it outlives any single server run, since
+	// the minecraft container — and its log file — can outlive this API
+	// process). It's never closed on stop, so a status check replaces the old
+	// "hub closed" signal for knowing when the server has gone down.
+	statusTicker := time.NewTicker(2 * time.Second)
+	defer statusTicker.Stop()
+
 	// Stream log lines to client
 	for {
 		select {
@@ -126,6 +133,14 @@ func ConsoleHandler(c *gin.Context) {
 			conn.SetWriteDeadline(time.Now().Add(consoleWriteTimeout))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				log.Printf("websocket ping failed: %v", err)
+				return
+			}
+
+		case <-statusTicker.C:
+			if !services.IsServerRunning() {
+				conn.SetWriteDeadline(time.Now().Add(consoleWriteTimeout))
+				conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "server stopped"))
 				return
 			}
 

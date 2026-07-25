@@ -4,7 +4,7 @@ MC Manager is a tool for managing Minecraft servers, built with my homelab in mi
 ## Tech Requirements / Stack
 - Go 1.25+
 - Docker & Docker Compose
-- Java 25 (provided by the Docker image)
+- Java 25 (provided by the `minecraft` service's Docker image)
 
 ## Installation
 
@@ -36,19 +36,24 @@ MC Manager is a tool for managing Minecraft servers, built with my homelab in mi
 docker compose up --build -d
 ```
 
-This builds the image from the `Dockerfile`, which:
-- Installs Go 1.25 and Java 25
-- Downloads Go dependencies
-- Generates Swagger docs and compiles the binary
-- Exposes ports `8080` (API) and `25565` (Minecraft)
+This builds two separate images and starts both as their own containers:
+- `mc-manager` (`Dockerfile`) — downloads Go dependencies, generates Swagger
+  docs, and compiles the API binary. No JDK; it only ever talks to the
+  Minecraft process through the shared `minecraft-server/` volume.
+- `minecraft` (`Dockerfile.minecraft`) — runs the JVM under a small Go
+  supervisor (`cmd/supervisor`), so restarting/redeploying the API no longer
+  takes the live game server down with it.
 
-The `minecraft-server/` directory is mounted as a volume so world data persists across container restarts.
+The `minecraft-server/` directory is bind-mounted into both containers so world data persists across restarts and redeploys of either one independently.
 
 ### Volumes
 
-| Host path | Container path | Purpose |
-|---|---|---|
-| `./minecraft-server` | `/app/minecraft-server` | Minecraft world data, configs, JARs |
+| Host path | Container path | Service | Purpose |
+|---|---|---|---|
+| `./minecraft-server` | `/app/minecraft-server` | `mc-manager` | Minecraft world data, configs, JARs |
+| `./minecraft-server` | `/mc` | `minecraft` | Same directory, from the JVM's side |
+| `./data` | `/app/data` | `mc-manager` | SQLite database |
+| `./backups` | `/app/backups` | `mc-manager` | World backup archives |
 
 ### Ports
 
@@ -56,6 +61,18 @@ The `minecraft-server/` directory is mounted as a volume so world data persists 
 |---|---|
 | `8080` | Go API server |
 | `25565` | Minecraft server |
+| `24454/udp` | Simple Voice Chat |
+
+### Development (hot-reload)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Builds the `mc-manager` image's `dev` target instead (full Go toolchain +
+[air](https://github.com/air-verse/air)), mounts the whole project directory
+in, and runs `air` so any Go code change triggers an automatic rebuild. The
+`minecraft` service is unaffected either way.
 
 ### Environment Variables
 

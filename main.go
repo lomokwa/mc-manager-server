@@ -5,6 +5,7 @@ package main
 import (
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 
@@ -21,6 +22,13 @@ import (
 	_ "github.com/lomokwa/mc-manager/docs"
 )
 
+// pprofAddr is loopback-only: pprof's own handlers (a 30s CPU profile, a full goroutine dump) are
+// diagnostic-only and were never meant to sit behind JWT/API-key auth like the rest of the API, so this
+// listens on a separate port bound to 127.0.0.1 instead of joining Gin's public router. Reachable with
+// `docker exec <container> wget -qO- http://127.0.0.1:6060/debug/pprof/goroutine?debug=2`, never from
+// outside the container.
+const pprofAddr = "127.0.0.1:6060"
+
 // @title MC Manager API
 // @version 1.0
 // @description API for managing a Minecraft server
@@ -30,6 +38,13 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("no .env file found, using system environment")
 	}
+
+	go func() {
+		log.Printf("pprof diagnostics listening on %s (container-local only)", pprofAddr)
+		if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+			log.Printf("pprof listener failed to start: %v", err)
+		}
+	}()
 
 	// Initialize database
 	db.Init(os.Getenv("DB_PATH"))

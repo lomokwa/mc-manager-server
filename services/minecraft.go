@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lomokwa/mc-manager/types"
@@ -228,7 +230,52 @@ func loadUUIDs(filename string) (map[string]bool, error) {
 	return set, nil
 }
 
+// listResponseLine matches vanilla's own "/list" reply, anchored to the real leading
+// "[HH:MM:SS] [Server thread/INFO]: " prefix a genuine server-generated console line always carries. The
+// previous strings.Contains(line, "players online:") check also matched that exact substring inside a
+// PLAYER'S OWN chat message (e.g. someone typing "There are 99 players online: Herobrine" in game chat),
+// which would spoof a fake player list back to GetOnlinePlayers' caller. Mirrors the anchoring convention
+// selton-mello-bot's own consoleStream.ts already uses for this same class of bug.
+var listResponseLine = regexp.MustCompile(`^\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: There are \d+ of a max of \d+ players online:\s*(.*)$`)
+
+var (
+	onlinePlayersMu       sync.Mutex
+	onlinePlayersCache    []string
+	onlinePlayersCachedAt time.Time
+)
+
+// onlinePlayersCacheTTL: fetchOnlinePlayers doesn't just read a file -- it runs a REAL "/list" command
+// against the live Minecraft console and waits (up to 5s) for the reply. A caller polling this every few
+// seconds (e.g. a Discord bot's presence rotation) was paying that full round trip every single time.
+const onlinePlayersCacheTTL = 10 * time.Second
+
+// GetOnlinePlayers returns the currently-online player names, reusing a recent result within
+// onlinePlayersCacheTTL instead of re-querying the live server console on every call.
 func GetOnlinePlayers() ([]string, error) {
+	onlinePlayersMu.Lock()
+	if !onlinePlayersCachedAt.IsZero() && time.Since(onlinePlayersCachedAt) < onlinePlayersCacheTTL {
+		cached := onlinePlayersCache
+		onlinePlayersMu.Unlock()
+		return cached, nil
+	}
+	onlinePlayersMu.Unlock()
+
+	names, err := fetchOnlinePlayers()
+	if err != nil {
+		return nil, err
+	}
+
+	onlinePlayersMu.Lock()
+	onlinePlayersCache = names
+	onlinePlayersCachedAt = time.Now()
+	onlinePlayersMu.Unlock()
+
+	return names, nil
+}
+
+// fetchOnlinePlayers is the original always-live implementation, now only ever reached through
+// GetOnlinePlayers' cache above: sends "list" to the server console and parses the real reply.
+func fetchOnlinePlayers() ([]string, error) {
 	hub := GetLogHub()
 	if hub == nil {
 		return nil, fmt.Errorf("log hub not available")
@@ -253,20 +300,20 @@ draining:
 	for {
 		select {
 		case line := <-ch:
-			if strings.Contains(line, "players online:") {
-				parts := strings.SplitN(line, "players online: ", 2)
-
-				if len(parts) < 2 || parts[1] == "" {
-					return []string{}, nil
-				}
-
-				names := strings.Split(parts[1], ", ")
-				for i := range names {
-					names[i] = strings.TrimSpace(names[i])
-				}
-
-				return names, nil
+			match := listResponseLine.FindStringSubmatch(line)
+			if match == nil {
+				continue
 			}
+			if match[1] == "" {
+				return []string{}, nil
+			}
+
+			names := strings.Split(match[1], ", ")
+			for i := range names {
+				names[i] = strings.TrimSpace(names[i])
+			}
+
+			return names, nil
 
 		case <-time.After(5 * time.Second):
 			return nil, fmt.Errorf("timed out waiting for player list")

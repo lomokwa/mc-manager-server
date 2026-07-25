@@ -44,23 +44,11 @@ This builds the image from the `Dockerfile`, which:
 
 The `minecraft-server/` directory is mounted as a volume so world data persists across container restarts.
 
-### Development (with hot-reload)
-
-```bash
-docker compose up
-```
-
-The `docker-compose.override.yml` automatically activates in development and:
-- Mounts the entire project directory into the container
-- Replaces the production `CMD` with [Air](https://github.com/air-verse/air) for hot-reload
-- Any code change triggers an automatic rebuild
-
 ### Volumes
 
 | Host path | Container path | Purpose |
 |---|---|---|
 | `./minecraft-server` | `/app/minecraft-server` | Minecraft world data, configs, JARs |
-| `.` (dev only) | `/app` | Full source for hot-reload |
 
 ### Ports
 

@@ -52,6 +52,14 @@ func main() {
 	// Start the automatic backup scheduler
 	services.StartBackupScheduler()
 
+	// Default to release mode (quieter, no debug overhead); set GIN_MODE=debug
+	// locally to get gin's verbose per-request logging during development.
+	if mode := os.Getenv("GIN_MODE"); mode != "" {
+		gin.SetMode(mode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	r := gin.Default()
 
 	// Cors config

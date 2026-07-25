@@ -25,9 +25,6 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Install Air for hot reload
-RUN curl -sSfL https://raw.githubusercontent.com/air-verse/air/master/install.sh | sh -s -- -b /usr/local/bin
-
 # Copy rest of code
 COPY . .
 

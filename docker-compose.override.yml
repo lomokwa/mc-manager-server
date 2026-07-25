@@ -1,5 +1,0 @@
-services:
-  mc-manager:
-    volumes:
-      - .:/app
-    command: air

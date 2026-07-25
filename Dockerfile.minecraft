@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+#
+# Runs the Minecraft JVM, decoupled from the API's own container lifecycle so
+# an API redeploy never has to take the game server down. mc-supervisor (the
+# entrypoint) owns the JVM child process and exposes a control plane on the
+# shared ./minecraft-server volume — see cmd/supervisor and
+# services/{process,logtail,fifo_linux}.go for the API side of that contract.
+
+# ---- Build stage: compile the supervisor as a static binary ----
+FROM golang:1.25-bookworm AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/mc-supervisor ./cmd/supervisor
+
+# ---- Runtime stage: JRE + supervisor. No Go toolchain. ----
+# Matches the JDK MAJOR version prod already ran (Oracle JDK 25) to minimize
+# behavioral change on the one-shot cutover. Java 21 alone is enough for any
+# current Minecraft version, so eclipse-temurin:21-jre-noble is the fallback
+# if this exact tag isn't pullable on the deploy host (verified reachable as
+# of this change; see PLAN notes for the pre-flight check).
+FROM eclipse-temurin:25-jre-noble AS runtime
+WORKDIR /mc
+COPY --from=build /out/mc-supervisor /usr/local/bin/mc-supervisor
+
+EXPOSE 25565
+EXPOSE 24454/udp
+
+ENTRYPOINT ["/usr/local/bin/mc-supervisor"]

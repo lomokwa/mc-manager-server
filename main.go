@@ -49,6 +49,12 @@ func main() {
 	// Initialize database
 	db.Init(os.Getenv("DB_PATH"))
 
+	// Start following the Minecraft server's own log file. This must happen
+	// before any handler can be reached, since GetLogHub() is expected to be
+	// non-nil from here on — the JVM itself now runs in a separate container
+	// (see cmd/supervisor), so this is how the API learns what it's doing.
+	services.StartLogTailer()
+
 	// Start the automatic backup scheduler
 	services.StartBackupScheduler()
 

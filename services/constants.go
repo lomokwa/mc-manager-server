@@ -77,3 +77,14 @@ const ServerDir = "./minecraft-server"
 const BackupDir = "./backups"
 const ServerJarPath = ServerDir + "/server.jar"
 const ServerMetaPath = ServerDir + "/server-meta.json"
+
+// Control-plane files shared with mc-supervisor (the separate container that
+// now owns the Minecraft JVM) over the ServerDir bind mount. ConsoleFifoPath
+// carries raw console commands; ControlFifoPath carries lifecycle verbs
+// (START/STOP/RESTART/KILL); StatusFilePath is the supervisor's heartbeat.
+const ControlDirName = ".mcmanager"
+const ControlDir = ServerDir + "/" + ControlDirName
+const ConsoleFifoPath = ControlDir + "/console.in"
+const ControlFifoPath = ControlDir + "/control.in"
+const StatusFilePath = ControlDir + "/status.json"
+const LatestLogPath = ServerDir + "/logs/latest.log"

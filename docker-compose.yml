@@ -1,12 +1,36 @@
 services:
-  mc-manager:
-    build: .
+  minecraft:
+    build:
+      context: .
+      dockerfile: Dockerfile.minecraft
     ports:
-      - "8080:8080" # Port for Go server
-      - "25565:25565" # Port for minecraft server
-      - "24454:24454/udp" # Port for Simple Voice Chat mod
+      - "25565:25565" # Minecraft
+      - "24454:24454/udp" # Simple Voice Chat mod
+    volumes:
+      - ./minecraft-server:/mc
+    environment:
+      MC_SERVER_DIR: /mc
+      MC_SERVER_JAR: server.jar
+      MC_JAVA_XMS: 1G
+      MC_JAVA_XMX: 2G
+      MC_STOP_TIMEOUT: 30s
+    init: true # tini as PID 1: forwards SIGTERM correctly, reaps zombies
+    stop_grace_period: 60s # let the world save before a hard SIGKILL
+    restart: unless-stopped
+
+  mc-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./server"]
+    depends_on:
+      - minecraft
+    ports:
+      - "8080:8080" # Go API
     volumes:
       - ./minecraft-server:/app/minecraft-server
       - ./data:/app/data
+      - ./backups:/app/backups
+    env_file:
+      - .env
     restart: unless-stopped
-    command: ./server

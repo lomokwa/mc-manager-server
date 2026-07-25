@@ -1,11 +1,9 @@
 package services
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"os/exec"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,160 +11,117 @@ import (
 	"github.com/lomokwa/mc-manager/types"
 )
 
-var (
-	// mu guards the server process state below. Hold it (read or write) when
-	// touching serverCmd, serverStdin, logHub or serverDone.
-	mu          sync.RWMutex
-	serverCmd   *exec.Cmd
-	serverStdin io.WriteCloser
-	logHub      *types.LogHub
-	serverDone  chan struct{} // closed once the process has exited and state is cleared
+// stdinMu serializes this API process's own writes to the console FIFO. Cross
+// -container write atomicity for a single line is already guaranteed by POSIX
+// (writes under PIPE_BUF are atomic), but this keeps one API instance's own
+// command order tidy.
+var stdinMu sync.Mutex
 
-	// stdinMu serializes concurrent writes to the server's stdin.
-	stdinMu sync.Mutex
-)
+func writeControl(verb string) error {
+	return writeFifo(ControlFifoPath, verb+"\n")
+}
 
+// SendCommand forwards a raw console command to Minecraft via the console
+// FIFO the "minecraft" container's mc-supervisor reads. Never blocks waiting
+// for the JVM: if the server isn't running, it fails fast instead of hanging
+// the caller's HTTP request.
+func SendCommand(cmd string) error {
+	if !IsServerRunning() {
+		return fmt.Errorf("server is not running")
+	}
+	stdinMu.Lock()
+	defer stdinMu.Unlock()
+	return writeFifo(ConsoleFifoPath, cmd+"\n")
+}
+
+func readStatus() (types.ServerRuntimeStatus, bool) {
+	b, err := os.ReadFile(StatusFilePath)
+	if err != nil {
+		return types.ServerRuntimeStatus{}, false
+	}
+	var st types.ServerRuntimeStatus
+	if err := json.Unmarshal(b, &st); err != nil {
+		return types.ServerRuntimeStatus{}, false
+	}
+	return st, true
+}
+
+// IsServerRunning reports whether the JVM is up, per mc-supervisor's status
+// file. A stale heartbeat (the minecraft container itself is dead, not just
+// the JVM) is treated as not-running, so a crashed container can never be
+// mistaken for a healthy server.
+func IsServerRunning() bool {
+	st, ok := readStatus()
+	if !ok || !st.Running {
+		return false
+	}
+	return time.Since(st.Heartbeat) < 10*time.Second
+}
+
+// StartServerProcess signals mc-supervisor to start the JVM and waits for the
+// world to finish loading, returning the same "Done (...)" line the old
+// in-process implementation returned.
 func StartServerProcess() (string, error) {
-	mu.Lock()
-	if serverCmd != nil {
-		mu.Unlock()
+	if IsServerRunning() {
 		return "", fmt.Errorf("server already running")
 	}
 
-	log.Printf("Starting Server...")
-	cmd := exec.Command("java", "-Xms1G", "-Xmx2G", "-jar", "server.jar", "nogui")
-	cmd.Dir = "./minecraft-server"
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		mu.Unlock()
-		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
+	hub := GetLogHub()
+	if hub == nil {
+		return "", fmt.Errorf("log system not ready")
 	}
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		mu.Unlock()
-		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		mu.Unlock()
-		log.Printf("start server command failed: %v", err)
-		return "", fmt.Errorf("failed to start server: %w", err)
-	}
-
-	hub := types.NewLogHub()
-	done := make(chan struct{})
-	serverCmd = cmd
-	serverStdin = stdin
-	logHub = hub
-	serverDone = done
-	mu.Unlock()
-
-	// Pump stdout into the log hub and detect readiness.
-	ready := make(chan string, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			log.Println(line)
-			hub.Broadcast(line)
-			if strings.Contains(line, "Done") {
-				// Non-blocking: never stall the log pump waiting on a reader.
-				select {
-				case ready <- line:
-				default:
-				}
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			log.Printf("error reading server output: %v", err)
-		}
+	// Discard whatever's still buffered from a previous session before
+	// signaling start, so a stale "Done" line can't be mistaken for this one.
+drain:
+	for {
 		select {
-		case ready <- "":
+		case <-ch:
 		default:
+			break drain
 		}
-	}()
+	}
 
-	// Reap the process and clear shared state exactly once. This is the only
-	// place that calls cmd.Wait(), so callers observe the exit via serverDone.
-	go func() {
-		waitErr := cmd.Wait()
-		log.Printf("server process exited: %v", waitErr)
-		mu.Lock()
-		hub.Close()
-		serverCmd = nil
-		serverStdin = nil
-		logHub = nil
-		serverDone = nil
-		mu.Unlock()
-		close(done)
-	}()
+	if err := writeControl("START"); err != nil {
+		return "", fmt.Errorf("failed to signal start: %w", err)
+	}
 
-	select {
-	case line := <-ready:
-		if line == "" {
-			return "", fmt.Errorf("server process exited before becoming ready")
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return "", fmt.Errorf("log stream closed before the server became ready")
+			}
+			if strings.Contains(line, "]: Done (") {
+				return line, nil
+			}
+		case <-time.After(120 * time.Second):
+			_ = writeControl("KILL")
+			return "", fmt.Errorf("server failed to start within 120 seconds")
 		}
-		return line, nil
-	case <-time.After(120 * time.Second):
-		// Kill and let the reaper goroutine clean up shared state.
-		cmd.Process.Kill()
-		return "", fmt.Errorf("server failed to start within 120 seconds")
 	}
 }
 
+// StopServerProcess signals a graceful stop and waits for mc-supervisor to
+// report the JVM down. The supervisor owns the actual "stop, wait, then kill"
+// sequence (see cmd/supervisor) — this just waits comfortably past that
+// timeout for the status file to catch up.
 func StopServerProcess() (string, error) {
-	log.Printf("executing stop server command")
-
-	mu.RLock()
-	cmd := serverCmd
-	done := serverDone
-	mu.RUnlock()
-	if cmd == nil || done == nil {
+	if !IsServerRunning() {
 		return "", fmt.Errorf("server is not running")
 	}
-
-	if err := SendCommand("stop"); err != nil {
-		log.Printf("failed to send stop command: %v", err)
-		return "", fmt.Errorf("failed to send stop command: %w", err)
+	if err := writeControl("STOP"); err != nil {
+		return "", fmt.Errorf("failed to signal stop: %w", err)
 	}
 
-	select {
-	case <-done:
-		log.Printf("server stopped gracefully")
-		return "server stopped", nil
-
-	case <-time.After(30 * time.Second):
-		log.Printf("server did not stop in time, force killing")
-		cmd.Process.Kill()
-		<-done // wait for the reaper to finish clearing state
-		return "server force-killed after timeout", nil
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsServerRunning() {
+			return "server stopped", nil
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-}
-
-func IsServerRunning() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return serverCmd != nil
-}
-
-func SendCommand(cmd string) error {
-	mu.RLock()
-	w := serverStdin
-	mu.RUnlock()
-	if w == nil {
-		return fmt.Errorf("server is not running")
-	}
-
-	stdinMu.Lock()
-	defer stdinMu.Unlock()
-	_, err := w.Write([]byte(cmd + "\n"))
-	return err
-}
-
-func GetLogHub() *types.LogHub {
-	mu.RLock()
-	defer mu.RUnlock()
-	return logHub
+	return "", fmt.Errorf("server did not stop in time")
 }

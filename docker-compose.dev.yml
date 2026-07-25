@@ -1,0 +1,12 @@
+# Dev only — NOT auto-merged (docker-compose.override.yml would be; this
+# filename isn't). Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  mc-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev # the stage with the Go toolchain + air installed
+    volumes:
+      - .:/app
+    command: air

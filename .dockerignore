@@ -1,0 +1,12 @@
+.git
+.github
+web
+minecraft-server
+data
+backups
+tmp
+*.md
+.env
+docker-compose*.yml
+Dockerfile*
+.air.toml

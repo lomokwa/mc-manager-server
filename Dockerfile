@@ -1,39 +1,35 @@
-# Use official go image
-FROM golang:1.25
+# syntax=docker/dockerfile:1.7
+#
+# Builds the API only. The Minecraft JVM now runs in its own container (see
+# Dockerfile.minecraft) so this image no longer needs a JDK at all — that was
+# the single biggest chunk of build time before (downloading and extracting
+# the full Oracle JDK on every build).
 
-# Install Java 25 (required by latest Minecraft server jar)
-RUN apt-get update && apt-get install -y wget && \
-    ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then \
-      JDK_URL="https://download.oracle.com/java/25/latest/jdk-25_linux-x64_bin.tar.gz"; \
-    elif [ "$ARCH" = "arm64" ]; then \
-      JDK_URL="https://download.oracle.com/java/25/latest/jdk-25_linux-aarch64_bin.tar.gz"; \
-    fi && \
-    wget -q "$JDK_URL" -O jdk.tar.gz && \
-    mkdir -p /opt/java && \
-    tar -xzf jdk.tar.gz -C /opt/java --strip-components=1 && \
-    rm jdk.tar.gz && \
-    apt-get clean
-
-ENV JAVA_HOME=/opt/java
-ENV PATH="$JAVA_HOME/bin:$PATH"
-
-# Set /app as work dir.
+# ---- Build stage: full Go toolchain ----
+FROM golang:1.25-bookworm AS build
 WORKDIR /app
 
-# Copy go module files and install dependencies
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
-# Copy rest of code
 COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go generate ./... && CGO_ENABLED=1 go build -o /out/server .
 
-# Generate swagger docs and build go app
-RUN go generate ./... && go build -o server .
+# ---- Dev stage: hot reload via air, used only by docker-compose.dev.yml ----
+FROM build AS dev
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go install github.com/air-verse/air@latest
+CMD ["air"]
 
-# Expose ports
-EXPOSE 8080 25565
-EXPOSE 24454/udp
+# ---- Runtime stage: prod. No Go toolchain, no Java, just the binary. ----
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/server ./server
 
-# Run app
+EXPOSE 8080
 CMD ["./server"]

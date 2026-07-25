@@ -33,6 +33,13 @@ func safePath(requested string) (string, error) {
 	if !strings.HasPrefix(target, base) {
 		return "", fmt.Errorf("path traversal denied")
 	}
+	// The control dir holds the FIFOs and status file mc-supervisor and this
+	// API use to talk to each other (see services/constants.go) — never let
+	// the file manager touch it.
+	if target == filepath.Join(base, services.ControlDirName) ||
+		strings.HasPrefix(target, filepath.Join(base, services.ControlDirName)+string(filepath.Separator)) {
+		return "", fmt.Errorf("path is reserved")
+	}
 	return target, nil
 }
 

@@ -323,6 +323,20 @@ func DeleteBackup(name string) error {
 	return os.Remove(path)
 }
 
+// BackupFilePath validates name and returns the absolute path to the backup
+// archive within BackupDir, for handlers that need to serve the file itself
+// (e.g. download). Read-only, so it doesn't need backupMu.
+func BackupFilePath(name string) (string, error) {
+	path, err := resolveBackupPath(name)
+	if err != nil {
+		return "", err
+	}
+	if !utils.FileExists(path) {
+		return "", fmt.Errorf("backup %q not found", name)
+	}
+	return path, nil
+}
+
 // PruneBackups deletes the oldest backups beyond the keep count. keep <= 0
 // means "keep everything" (no pruning).
 func PruneBackups(keep int) error {

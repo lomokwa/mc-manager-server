@@ -154,29 +154,37 @@ func TestLogHub_Close_ClosesAllSubscribersAndIsSafeToCallTwice(t *testing.T) {
 
 func TestLogHub_ConcurrentSubscribeAndBroadcast(t *testing.T) {
 	hub := NewLogHub()
-	var wg sync.WaitGroup
+	var subWG sync.WaitGroup
+	stop := make(chan struct{})
 
 	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		subWG.Add(1)
+		go func() {
+			defer subWG.Done()
 			ch := hub.Subscribe()
 			defer hub.Unsubscribe(ch)
-			for range ch {
-				// drain until closed/unsubscribed
+			for {
+				select {
+				case <-ch:
+				case <-stop:
+					return
+				}
 			}
-		}(i)
+		}()
 	}
 
+	var pubWG sync.WaitGroup
 	for i := 0; i < 50; i++ {
-		wg.Add(1)
+		pubWG.Add(1)
 		go func(i int) {
-			defer wg.Done()
+			defer pubWG.Done()
 			hub.Broadcast(lineName(i))
 		}(i)
 	}
+	pubWG.Wait()
 
-	wg.Wait()
+	close(stop)
+	subWG.Wait()
 }
 
 func lineName(i int) string {

@@ -1,16 +1,13 @@
 name: Deploy
 
 on:
-  workflow_run:
-    workflows: ["CI"]
+  push:
     branches: [main]
-    types: [completed]
 
 jobs:
   deploy:
     name: Deploy to homelab
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Install cloudflared
         run: |

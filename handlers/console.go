@@ -3,11 +3,14 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/lomokwa/mc-manager/middleware"
 	"github.com/lomokwa/mc-manager/services"
+	"github.com/lomokwa/mc-manager/types"
 )
 
 var upgrader = websocket.Upgrader{
@@ -38,6 +41,10 @@ func ConsoleHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "server log stream not available"})
 		return
 	}
+
+	// Read once, before the upgrade -- the route's RequirePermission(console.read)
+	// already confirmed a JWT is present, so this is always populated here.
+	userID, _ := middleware.UserIDFromContext(c)
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -82,6 +89,13 @@ func ConsoleHandler(c *gin.Context) {
 			}
 			cmd := string(msg)
 			if cmd == "" {
+				continue
+			}
+			if !services.HasPermission(userID, classifyConsoleInput(cmd)) {
+				select {
+				case errCh <- "you don't have permission to send that":
+				default:
+				}
 				continue
 			}
 			if err := services.SendCommand(cmd); err != nil {
@@ -149,4 +163,20 @@ func ConsoleHandler(c *gin.Context) {
 			return
 		}
 	}
+}
+
+// classifyConsoleInput decides which permission a raw console line needs.
+// There is no separate chat channel -- "say <message>" IS how a broadcast is
+// sent from the server console (the same convention vanilla's own console
+// uses), so it's the one shape that counts as chat; everything else is a
+// command. This is deliberately simple rather than a full command parser: it
+// can't be fooled into treating a real command as chat (only a literal
+// leading "say" ever classifies that way), which is the direction that
+// matters for a permission check.
+func classifyConsoleInput(cmd string) types.Permission {
+	trimmed := strings.TrimSpace(cmd)
+	if strings.EqualFold(trimmed, "say") || strings.HasPrefix(strings.ToLower(trimmed), "say ") {
+		return types.PermConsoleChat
+	}
+	return types.PermConsoleCommands
 }

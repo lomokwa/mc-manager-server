@@ -139,3 +139,14 @@ func GetUsers() ([]types.User, error) {
 
 	return users, nil
 }
+
+// GetUserByID looks up a single user, used by the roles/permissions
+// endpoints to confirm a target ID is a real account before touching
+// user_roles (SQLite doesn't enforce the FK by default) and to echo back
+// whose permissions were just changed.
+func GetUserByID(id int) (types.User, error) {
+	var u types.User
+	err := db.DB.QueryRow("SELECT id, username, created_at FROM users WHERE id = ?", id).
+		Scan(&u.ID, &u.Username, &u.CreatedAt)
+	return u, err
+}

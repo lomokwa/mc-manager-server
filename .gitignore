@@ -1,4 +1,5 @@
 .env
+permissions-seed.json
 minecraft-server
 tmp/
 data/

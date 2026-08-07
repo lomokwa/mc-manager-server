@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lomokwa/mc-manager/middleware"
 	"github.com/lomokwa/mc-manager/services"
 	"github.com/lomokwa/mc-manager/types"
 )
@@ -46,6 +47,22 @@ func RegisterHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, types.APIResponse{Success: true})
+}
+
+// GetMeHandler returns the caller's own account info -- self-service, no
+// admin.manage_users needed, unlike the full GetUsersHandler list.
+func GetMeHandler(c *gin.Context) {
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, types.APIResponse{Error: "missing or invalid session"})
+		return
+	}
+	user, err := services.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, types.APIResponse{Error: "user not found"})
+		return
+	}
+	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: user})
 }
 
 func GetUsersHandler(c *gin.Context) {

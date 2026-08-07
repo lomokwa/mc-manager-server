@@ -81,3 +81,10 @@ func setupTestDB(t *testing.T) {
 		db.DB = prev
 	})
 }
+
+// clearStatusFile removes any status file left by a prior test so
+// services.IsServerRunning starts from a known "not running" state.
+func clearStatusFile(t *testing.T) {
+	t.Helper()
+	os.Remove(services.StatusFilePath)
+}

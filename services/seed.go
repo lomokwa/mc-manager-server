@@ -9,22 +9,17 @@ import (
 	"github.com/lomokwa/mc-manager/db"
 )
 
-// PermissionsSeedPath is where the seed file lives once settled: inside the
-// control-plane directory, which handlers/files.go's safePath already
-// excludes from the file browser (it's how the FIFOs/status.json stay
-// hidden from that page too) -- so this never shows up next to world data
-// for anyone with files.read, and it survives container recreates since
-// ControlDir is on the same bind-mounted volume as the rest of ServerDir.
-var PermissionsSeedPath = filepath.Join(ControlDir, "permissions-seed.json")
-
-// permissionsSeedFallbacks are checked in order, and the first one found is
-// moved to PermissionsSeedPath -- never overwriting it if it's already
-// there. ServerDir is first because it's the one location every operator
-// can reach the same way they already reach server.properties (FTP/SFTP/a
-// hosting panel's file manager), even without access to wherever this
-// repo's own working directory actually lives. The repo root is kept as a
-// fallback for anyone who *does* have that access (local dev, direct SSH).
-var permissionsSeedFallbacks = []string{
+// PermissionsSeedCandidates are checked in order every boot; the first one
+// found is what gets applied. ServerDir is checked first since it's the one
+// location every operator can reach the same way they already reach
+// server.properties (FTP/SFTP/a hosting panel's file manager) -- the repo
+// root is kept as a fallback for anyone who does have that access (local
+// dev, direct SSH). Deliberately not moved or relocated anywhere: this
+// always re-reads whichever file the operator can already see and edit, so
+// fixing a typo (wrong username, wrong role name) is just "edit the file,
+// restart" -- there's no separate "already consumed" copy that a correction
+// could get silently ignored in favor of.
+var PermissionsSeedCandidates = []string{
 	filepath.Join(ServerDir, "permissions-seed.json"),
 	"./permissions-seed.json",
 }
@@ -38,27 +33,24 @@ type seedFile struct {
 	Users []seedEntry `json:"users"`
 }
 
-// ApplyPermissionsSeed reads PermissionsSeedPath, if present, and assigns
-// each listed username its role -- but only for a user who doesn't already
-// have one. It runs on every boot rather than once, on purpose: the file is
-// usually dropped before anyone has registered yet, so the intended owner's
-// account may not exist on the first boot that sees it. Once a user has a
-// role (assigned here or from the UI), this never touches them again, so
-// hand-tuned overrides are never clobbered by a redeploy.
+// ApplyPermissionsSeed reads the first file it finds among
+// PermissionsSeedCandidates and assigns each listed username its role --
+// but only for a user who doesn't already have one. It runs on every boot
+// rather than once, on purpose: the file is usually dropped before anyone
+// has registered yet, so the intended owner's account may not exist on the
+// first boot that sees it. Once a user has a role (assigned here or from
+// the UI), this never touches them again, so hand-tuned overrides are never
+// clobbered by a redeploy, and neither is a role someone already fixed by
+// hand after a typo'd seed entry silently missed them.
 func ApplyPermissionsSeed() {
-	settleSeedFile()
-
-	data, err := os.ReadFile(PermissionsSeedPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("permissions seed: failed to read %s: %v", PermissionsSeedPath, err)
-		}
+	path, data := readFirstSeedFile()
+	if data == nil {
 		return
 	}
 
 	var seed seedFile
 	if err := json.Unmarshal(data, &seed); err != nil {
-		log.Printf("permissions seed: invalid JSON in %s: %v", PermissionsSeedPath, err)
+		log.Printf("permissions seed: invalid JSON in %s: %v", path, err)
 		return
 	}
 
@@ -67,31 +59,15 @@ func ApplyPermissionsSeed() {
 	}
 }
 
-// settleSeedFile moves the first fallback file it finds into
-// PermissionsSeedPath. A no-op the moment something is already at
-// PermissionsSeedPath -- so a fallback copy left behind by a failed earlier
-// move, or a second file dropped later, can never clobber whatever's
-// already settled and possibly already applied.
-func settleSeedFile() {
-	if _, err := os.Stat(PermissionsSeedPath); err == nil {
-		return
-	}
-
-	for _, candidate := range permissionsSeedFallbacks {
-		if _, err := os.Stat(candidate); err != nil {
+func readFirstSeedFile() (path string, data []byte) {
+	for _, candidate := range PermissionsSeedCandidates {
+		b, err := os.ReadFile(candidate)
+		if err != nil {
 			continue
 		}
-		if err := os.MkdirAll(ControlDir, 0o770); err != nil {
-			log.Printf("permissions seed: failed to create %s: %v", ControlDir, err)
-			return
-		}
-		if err := os.Rename(candidate, PermissionsSeedPath); err != nil {
-			log.Printf("permissions seed: failed to move %s to %s: %v", candidate, PermissionsSeedPath, err)
-			return
-		}
-		log.Printf("permissions seed: moved %s to %s", candidate, PermissionsSeedPath)
-		return
+		return candidate, b
 	}
+	return "", nil
 }
 
 // EnsureBootstrapOwner is a last-resort safety net for the case

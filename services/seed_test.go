@@ -2,27 +2,31 @@ package services
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lomokwa/mc-manager/db"
 )
 
-// withSeedFile writes content to PermissionsSeedPath for the duration of a
-// test and removes it afterward. PermissionsSeedPath is a fixed relative
-// path (like ServerDir/BackupDir), so tests using this must not run in
-// parallel with each other.
+// withSeedFile writes content directly to the final, already-settled
+// PermissionsSeedPath (inside ControlDir) -- for tests of ApplyPermissionsSeed's
+// entry-processing behavior, which is independent of where the file
+// originally came from. The settleSeedFile move itself has its own tests
+// below. Callers must have already called setupServerDir(t).
 func withSeedFile(t *testing.T, content string) {
 	t.Helper()
+	if err := os.MkdirAll(ControlDir, 0755); err != nil {
+		t.Fatalf("failed to create control dir: %v", err)
+	}
 	if err := os.WriteFile(PermissionsSeedPath, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write seed file: %v", err)
 	}
-	t.Cleanup(func() {
-		os.Remove(PermissionsSeedPath)
-	})
 }
 
 func TestApplyPermissionsSeed_AssignsMatchingUsers(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
@@ -44,6 +48,7 @@ func TestApplyPermissionsSeed_AssignsMatchingUsers(t *testing.T) {
 
 func TestApplyPermissionsSeed_NeverOverwritesAnExistingAssignment(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
@@ -67,6 +72,7 @@ func TestApplyPermissionsSeed_NeverOverwritesAnExistingAssignment(t *testing.T) 
 
 func TestApplyPermissionsSeed_SkipsUnregisteredUsername(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
@@ -78,16 +84,18 @@ func TestApplyPermissionsSeed_SkipsUnregisteredUsername(t *testing.T) {
 
 func TestApplyPermissionsSeed_MissingFileIsANoOp(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
-	os.Remove(PermissionsSeedPath) // ensure it's really absent
+	// No seed file anywhere -- fallbacks and the settled path are all absent.
 
 	ApplyPermissionsSeed() // must not panic or error
 }
 
 func TestApplyPermissionsSeed_UnknownRoleNameIsSkipped(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
@@ -105,14 +113,106 @@ func TestApplyPermissionsSeed_UnknownRoleNameIsSkipped(t *testing.T) {
 	}
 }
 
+func TestSettleSeedFile_MovesFromServerDirFallback(t *testing.T) {
+	setupServerDir(t)
+	writeServerFile(t, "permissions-seed.json", `{"users":[]}`)
+
+	settleSeedFile()
+
+	if _, err := os.Stat(filepath.Join(ServerDir, "permissions-seed.json")); !os.IsNotExist(err) {
+		t.Error("expected the dropped file to be gone from ServerDir after settling")
+	}
+	if _, err := os.Stat(PermissionsSeedPath); err != nil {
+		t.Errorf("expected the file to land at PermissionsSeedPath, got: %v", err)
+	}
+}
+
+func TestSettleSeedFile_MovesFromRepoRootFallback(t *testing.T) {
+	setupServerDir(t)
+	const repoRootPath = "./permissions-seed.json"
+	if err := os.WriteFile(repoRootPath, []byte(`{"users":[]}`), 0644); err != nil {
+		t.Fatalf("failed to write repo-root fallback: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(repoRootPath) })
+
+	settleSeedFile()
+
+	if _, err := os.Stat(repoRootPath); !os.IsNotExist(err) {
+		t.Error("expected the repo-root fallback to be gone after settling")
+	}
+	if _, err := os.Stat(PermissionsSeedPath); err != nil {
+		t.Errorf("expected the file to land at PermissionsSeedPath, got: %v", err)
+	}
+}
+
+func TestSettleSeedFile_PrefersServerDirOverRepoRoot(t *testing.T) {
+	setupServerDir(t)
+	writeServerFile(t, "permissions-seed.json", `{"users":[{"username":"from-serverdir","role":"Viewer"}]}`)
+	const repoRootPath = "./permissions-seed.json"
+	if err := os.WriteFile(repoRootPath, []byte(`{"users":[{"username":"from-reporoot","role":"Viewer"}]}`), 0644); err != nil {
+		t.Fatalf("failed to write repo-root fallback: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(repoRootPath) })
+
+	settleSeedFile()
+
+	settled, err := os.ReadFile(PermissionsSeedPath)
+	if err != nil {
+		t.Fatalf("expected a settled file, got error: %v", err)
+	}
+	if !strings.Contains(string(settled), "from-serverdir") {
+		t.Errorf("expected the ServerDir fallback to win, got: %s", settled)
+	}
+	// The lower-priority fallback is left untouched, not consumed.
+	if _, err := os.Stat(repoRootPath); err != nil {
+		t.Error("expected the repo-root fallback to be left alone once ServerDir's copy already won")
+	}
+}
+
+func TestSettleSeedFile_NeverOverwritesAlreadySettledFile(t *testing.T) {
+	setupServerDir(t)
+	if err := os.MkdirAll(ControlDir, 0755); err != nil {
+		t.Fatalf("failed to create control dir: %v", err)
+	}
+	if err := os.WriteFile(PermissionsSeedPath, []byte(`{"users":[{"username":"already-settled","role":"Viewer"}]}`), 0644); err != nil {
+		t.Fatalf("failed to seed the settled file: %v", err)
+	}
+	writeServerFile(t, "permissions-seed.json", `{"users":[{"username":"newly-dropped","role":"Owner"}]}`)
+
+	settleSeedFile()
+
+	settled, err := os.ReadFile(PermissionsSeedPath)
+	if err != nil {
+		t.Fatalf("expected the settled file to still exist, got error: %v", err)
+	}
+	if !strings.Contains(string(settled), "already-settled") {
+		t.Errorf("expected the already-settled file to survive untouched, got: %s", settled)
+	}
+	// The fresh drop in ServerDir is left in place, not silently discarded.
+	if _, err := os.Stat(filepath.Join(ServerDir, "permissions-seed.json")); err != nil {
+		t.Error("expected the newly-dropped file to be left alone rather than deleted")
+	}
+}
+
+func TestSettleSeedFile_NoFallbacksIsANoOp(t *testing.T) {
+	setupServerDir(t)
+
+	settleSeedFile() // must not panic or error with nothing to find
+
+	if _, err := os.Stat(PermissionsSeedPath); !os.IsNotExist(err) {
+		t.Error("expected no settled file to appear from nothing")
+	}
+}
+
 func TestEnsureBootstrapOwner_PromotesFirstRegisteredUser(t *testing.T) {
 	setupTestDB(t)
+	setupServerDir(t)
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("failed to seed roles: %v", err)
 	}
 	firstID := insertTestUser(t, "first-ever")
 	insertTestUser(t, "second-ever")
-	os.Remove(PermissionsSeedPath) // no seed file at all in this scenario
+	// No seed file anywhere in this scenario.
 
 	EnsureBootstrapOwner()
 

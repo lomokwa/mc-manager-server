@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,5 +240,32 @@ func TestNamespacedRoute_PermissionStillEnforced(t *testing.T) {
 	}
 	if nsW.Code != http.StatusForbidden {
 		t.Errorf("namespaced /api/servers/default/start: expected 403, got %d, body=%s", nsW.Code, nsW.Body.String())
+	}
+}
+
+// The panel calls GET /api/world on every Players load and it has been 404ing
+// in production, which apiFetch degrades to "unsupported" -- silent, so it
+// went unnoticed for weeks. This asserts the route exists and, like every
+// other pair, that the namespaced form behaves the same as the flat one.
+func TestWorldRoute_ExistsFlatAndNamespaced(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	token := newTestUserToken(t, "viewer", "Viewer")
+
+	r := newRouter()
+
+	for _, path := range []string{"/api/world", "/api/servers/" + services.DefaultServerID + "/world"} {
+		w := doRequest(r, http.MethodGet, path, token)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d, body=%s", path, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "level_name") {
+			t.Errorf("%s: expected a level_name in the body, got %s", path, w.Body.String())
+		}
 	}
 }

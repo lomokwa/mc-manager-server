@@ -134,6 +134,11 @@ func newRouter() *gin.Engine {
 	api.POST("/start", perm(types.PermServerStart), handlers.StartServerHandler)
 	api.POST("/stop", perm(types.PermServerStop), handlers.StopServerHandler)
 	api.GET("/players", perm(types.PermPlayersView), handlers.ListPlayersHandler)
+	// The panel calls this on every Players load (to offer "teleport to
+	// spawn"); it has been 404ing in production because the endpoint never
+	// landed. Gated with players.view: it's the same page's data, and world
+	// spawn is not more sensitive than the roster.
+	api.GET("/world", perm(types.PermPlayersView), handlers.GetWorldHandler)
 	api.GET("/properties", perm(types.PermSettingsView), handlers.GetServerPropertiesHandler)
 	api.PATCH("/properties", perm(types.PermSettingsEdit), handlers.UpdateServerPropertiesHandler)
 	api.GET("/users", perm(types.PermAdminManageUsers), handlers.GetUsersHandler)
@@ -219,6 +224,7 @@ func newRouter() *gin.Engine {
 	serverScoped.POST("/stop", perm(types.PermServerStop), handlers.StopServerHandler)
 	serverScoped.GET("/console", perm(types.PermConsoleRead), handlers.ConsoleHandler)
 	serverScoped.GET("/players", perm(types.PermPlayersView), handlers.ListPlayersHandler)
+	serverScoped.GET("/world", perm(types.PermPlayersView), handlers.GetWorldHandler)
 	serverScoped.GET("/properties", perm(types.PermSettingsView), handlers.GetServerPropertiesHandler)
 	serverScoped.PATCH("/properties", perm(types.PermSettingsEdit), handlers.UpdateServerPropertiesHandler)
 

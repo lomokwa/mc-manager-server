@@ -1,3 +1,17 @@
+# Log shipping note (Grafana/Loki):
+#
+# Both services below cap their json-file logs and carry `logging`/
+# `logging_jobname` labels, matching what selton-mello-bot already does so
+# Promtail sees one convention across every container on the homelab. The
+# Promtail config itself lives on the host, not in this repo, so if it
+# discovers jobs under different label names these two lines per service are
+# the only thing to change.
+#
+# WITHOUT a cap, docker's json-file driver grows forever. That is not
+# theoretical here: the web panel polls /api/status every 5s per open tab and
+# requestLogger writes a line per request, so one forgotten browser tab is
+# ~17k lines/day on its own -- and the minecraft container writes the JVM's
+# entire stdout on top of that.
 services:
   minecraft:
     build:
@@ -17,6 +31,26 @@ services:
     init: true # tini as PID 1: forwards SIGTERM correctly, reaps zombies
     stop_grace_period: 60s # let the world save before a hard SIGKILL
     restart: unless-stopped
+    labels:
+      logging: "promtail"
+      logging_jobname: "minecraft"
+    # 3x50m rather than the API's 3x10m: this is the JVM's full stdout, which
+    # is far chattier than the API, and it is also the log an incident is
+    # actually reconstructed from.
+    #
+    # HEADS UP: a `logging:` change only takes effect when the container is
+    # RECREATED, and the deploy workflow runs
+    #   docker compose up -d --build --no-deps mc-manager
+    # which deliberately never touches this service (that is what keeps API
+    # deploys from killing players). So merging this does NOT cap the
+    # minecraft container -- that needs a planned
+    #   docker compose up -d minecraft
+    # which restarts the game server and disconnects whoever is online.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       # mc-supervisor creates control.in before it does anything else, but
       # "container started" (plain depends_on) fires well before that -- this
@@ -46,3 +80,25 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    labels:
+      logging: "promtail"
+      logging_jobname: "mc-manager"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # The probe is the shipped binary itself (`./server healthcheck` -> GET
+      # 127.0.0.1/healthz, see main.go) rather than curl or wget, because the
+      # runtime image installs neither and adding one just to answer "are you
+      # up" would grow the image and its attack surface for nothing.
+      #
+      # start_period covers the real boot sequence -- migrations, the seed,
+      # the registry and one log tailer per server -- so a slow first start is
+      # never counted as a failure.
+      test: ["CMD", "./server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

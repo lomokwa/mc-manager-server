@@ -3,6 +3,7 @@ package main
 //go:generate go run github.com/swaggo/swag/cmd/swag@latest init
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
@@ -38,6 +39,15 @@ const pprofAddr = "127.0.0.1:6060"
 // @host localhost:8080
 // @BasePath /
 func main() {
+	// `./server healthcheck` is what docker-compose's healthcheck runs. It has
+	// to come first -- before even the logging setup: it must not boot the DB,
+	// the tailer or the scheduler, and must not depend on anything the real
+	// boot sequence sets up. See runHealthcheck for why the probe is the
+	// binary itself.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	setupLogging()
 
 	if err := godotenv.Load(); err != nil {
@@ -180,6 +190,15 @@ func newRouter() *gin.Engine {
 	r.POST("/api/register", handlers.RegisterHandler)
 	r.POST("/api/login", handlers.LoginHandler)
 
+	// Liveness probe for docker-compose's healthcheck. Unauthenticated on
+	// purpose -- a probe that needs a JWT can't run before anyone has logged
+	// in -- so it answers exactly one question and reveals nothing else: no
+	// version, no server state, no counts. "Is this process listening and
+	// routing?" is already observable by anyone who can reach the port.
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
 	// Console WebSocket
 	api.GET("/console", perm(types.PermConsoleRead), handlers.ConsoleHandler)
 
@@ -247,6 +266,40 @@ func newRouter() *gin.Engine {
 	})
 
 	return r
+}
+
+// runHealthcheck probes the API from inside its own container and returns the
+// exit code docker reads: 0 healthy, 1 not. Probing with the binary we already
+// ship is what keeps the runtime image free of curl/wget -- nothing extra in
+// the image, nothing extra on the attack surface, and the probe can never
+// drift from the port the server actually binds.
+//
+// It talks to 127.0.0.1, which also keeps it clear of the rate limiter: that
+// buckets per c.ClientIP(), so probe traffic and real traffic never share a
+// bucket and a burst of external requests can't starve the healthcheck into
+// failing a container that is in fact fine.
+func runHealthcheck() int {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:" + listenPort() + "/healthz")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: HTTP %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+// listenPort mirrors how gin's r.Run() picks a port (the PORT env var, else
+// 8080) so the probe always aims at wherever the server really listens.
+func listenPort() string {
+	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		return p
+	}
+	return "8080"
 }
 
 // allowedOrigins returns the CORS allow-list. It reads a comma-separated

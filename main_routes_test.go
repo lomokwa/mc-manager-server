@@ -6,11 +6,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/lomokwa/mc-manager/automation"
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/services"
 	"github.com/lomokwa/mc-manager/types"
@@ -197,13 +200,35 @@ func TestNamespacedRoute_UnknownServerID_404s(t *testing.T) {
 	}
 }
 
-// TestServersListRoute_NoExtraPermissionRequired proves GET /api/servers
-// needs nothing beyond a valid JWT -- same gate as GET /api/status -- by
-// reaching it with a user who has NO role assigned at all (deny-by-default
-// per services/permissions.go's EffectivePermissions). If this route were
-// accidentally gated behind a specific permission, this user would get 403
-// instead of 200.
-func TestServersListRoute_NoExtraPermissionRequired(t *testing.T) {
+// GET /api/servers is gated on PermServersView, which every built-in role
+// holds. That combination is the whole point, so both halves are asserted:
+// nobody who has a role loses the page, and an account with no role at all
+// doesn't get to read it just because this one route was never gated.
+//
+// The "every role keeps it" half is the one that matters most -- gating a
+// route that used to be JWT-only is exactly how a security tidy-up turns into
+// a regression for Moderators, Operators and Viewers.
+func TestServersListRoute_EveryBuiltinRoleKeepsIt(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	r := newRouter()
+
+	for _, role := range types.BuiltinRoles {
+		token := newTestUserToken(t, "user-"+role.Name, role.Name)
+		w := doRequest(r, http.MethodGet, "/api/servers", token)
+		if w.Code != http.StatusOK {
+			t.Errorf("role %q must still be able to list servers, got %d, body=%s", role.Name, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServersListRoute_DeniedWithoutARole(t *testing.T) {
 	setupTestDB(t)
 	setupServerDir(t)
 	bootTestRegistry(t)
@@ -213,8 +238,8 @@ func TestServersListRoute_NoExtraPermissionRequired(t *testing.T) {
 	r := newRouter()
 
 	w := doRequest(r, http.MethodGet, "/api/servers", token)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for a no-role authenticated user, got %d, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an account with no role, got %d, body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -239,5 +264,225 @@ func TestNamespacedRoute_PermissionStillEnforced(t *testing.T) {
 	}
 	if nsW.Code != http.StatusForbidden {
 		t.Errorf("namespaced /api/servers/default/start: expected 403, got %d, body=%s", nsW.Code, nsW.Body.String())
+	}
+}
+
+// doWrite is doRequest with a body -- the write routes need one, and a nil
+// body would fail binding before the permission gate is ever the reason.
+func doWrite(r *gin.Engine, method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// Reading automations and managing them are different powers. A rule can run
+// console commands, so automations.manage is console access by another name --
+// it must never be reachable with only automations.view, which the built-in
+// Moderator role holds.
+func TestAutomationRoutes_ViewCannotWrite(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	token := newTestUserToken(t, "mod", "Moderator")
+	r := newRouter()
+
+	for _, path := range []string{
+		"/api/automations",
+		"/api/automations/1",
+		"/api/automations/1/firings",
+		"/api/automation-webhooks",
+	} {
+		if w := doRequest(r, http.MethodGet, path, token); w.Code == http.StatusForbidden {
+			t.Errorf("a Moderator should be able to read %s, got 403", path)
+		}
+	}
+
+	// Every write route, not just POST /automations. A gate that covers four of
+	// five routes is the same as no gate.
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/automations", `{"server_id":"default","name":"x","trigger_kind":"stop","trigger_config":{},"actions":[{"type":"backup"}]}`},
+		{http.MethodPut, "/api/automations/1", `{"server_id":"default","name":"x","trigger_kind":"stop","trigger_config":{},"actions":[{"type":"backup"}]}`},
+		{http.MethodDelete, "/api/automations/1", ""},
+		{http.MethodPost, "/api/automations/1/enabled", `{"enabled":false}`},
+		{http.MethodPost, "/api/automation-webhooks", `{"name":"x","url":"https://discord.com/api/webhooks/1/tok"}`},
+		{http.MethodDelete, "/api/automation-webhooks/1", ""},
+		{http.MethodPost, "/api/automation-webhooks/1/test", ""},
+	} {
+		w := doWrite(r, tc.method, tc.path, token, tc.body)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("a Moderator must NOT reach %s %s, got %d: %s",
+				tc.method, tc.path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// The single most important assertion in the REST layer, run through the real
+// router rather than a handler in isolation -- the same shape as the existing
+// credential-redaction test.
+func TestAutomationRoutes_TheWebhookURLNeverAppearsInAnyResponse(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	token := newTestUserToken(t, "owner", "Owner")
+
+	const secret = "https://discord.com/api/webhooks/123456789/SUPERSECRETTOKEN"
+	hookID, err := automation.CreateWebhook(automation.Webhook{Name: "alertas", URL: secret})
+	if err != nil {
+		t.Fatalf("CreateWebhook: %v", err)
+	}
+	ruleID, err := automation.CreateRule(automation.Rule{
+		ServerID: services.DefaultServerID, Name: "avisa", Enabled: true,
+		TriggerKind: "stop", TriggerConfig: map[string]any{},
+		Actions: []automation.Action{{Type: "discord", WebhookID: hookID, Message: "caiu"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+	if err := automation.RecordFiring(automation.Firing{
+		RuleID: ruleID, Trigger: "stop", Outcome: `[{"action":"discord","ok":true}]`,
+	}); err != nil {
+		t.Fatalf("RecordFiring: %v", err)
+	}
+
+	r := newRouter()
+	rid := strconv.Itoa(ruleID)
+	for _, path := range []string{
+		"/api/automations",
+		"/api/automations/" + rid,
+		"/api/automations/" + rid + "/firings",
+		"/api/automation-webhooks",
+	} {
+		w := doRequest(r, http.MethodGet, path, token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", path, w.Code, w.Body.String())
+		}
+		for _, leak := range []string{"SUPERSECRETTOKEN", "discord.com/api/webhooks"} {
+			if strings.Contains(w.Body.String(), leak) {
+				t.Errorf("%s leaked the webhook credential: %s", path, w.Body.String())
+			}
+		}
+	}
+}
+
+// Gin panics at REGISTRATION when a static segment and a wildcard share a
+// position, which takes the whole API down at boot instead of failing one
+// endpoint. /automation-webhooks exists as its own prefix precisely because
+// /automations/webhooks would sit beside /automations/:id. Building the router
+// at all is the assertion.
+func TestAutomationRoutes_RouterBuildsWithoutAConflict(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+
+	if r := newRouter(); r == nil {
+		t.Fatal("expected a router")
+	}
+}
+
+// The other half of the gate. Without this, a router that denied EVERYONE
+// would pass TestAutomationRoutes_ViewCannotWrite -- a broken gate and a
+// correct one look identical from the denied side.
+func TestAutomationRoutes_ManageCanWriteEndToEnd(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	token := newTestUserToken(t, "owner", "Owner")
+	r := newRouter()
+
+	body := `{"server_id":"default","name":"backup ao parar","trigger_kind":"stop",
+	          "trigger_config":{},"actions":[{"type":"backup"}]}`
+	w := doWrite(r, http.MethodPost, "/api/automations", token, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("an Owner must be able to create a rule, got %d: %s", w.Code, w.Body.String())
+	}
+
+	rules, err := automation.ListRules()
+	if err != nil || len(rules) != 1 {
+		t.Fatalf("expected exactly one stored rule, got %+v (err %v)", rules, err)
+	}
+	id := strconv.Itoa(rules[0].ID)
+
+	// Who created a rule is the only audit trail this table has, and it comes
+	// from the JWT claim -- a shape that fails by being silently nil.
+	if rules[0].CreatedBy == nil {
+		t.Error("the rule was stored with no author")
+	}
+
+	if w := doWrite(r, http.MethodPost, "/api/automations/"+id+"/enabled", token, `{"enabled":false}`); w.Code != http.StatusOK {
+		t.Errorf("disable: got %d: %s", w.Code, w.Body.String())
+	}
+	if w := doWrite(r, http.MethodDelete, "/api/automations/"+id, token, ""); w.Code != http.StatusOK {
+		t.Errorf("delete: got %d: %s", w.Code, w.Body.String())
+	}
+	if rules, _ := automation.ListRules(); len(rules) != 0 {
+		t.Errorf("the rule survived the delete: %+v", rules)
+	}
+}
+
+// The one link nothing else covers: that a rule saved through the API reaches
+// the running engine. Every other test proves half of it -- the handler calls
+// its reloader, the engine reloads correctly -- and a missing
+// SetEngineReloader would pass both while the feature did nothing until the
+// next deploy.
+func TestAutomations_ARuleSavedThroughTheAPIFiresWithoutARestart(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	token := newTestUserToken(t, "owner", "Owner")
+
+	engine, stop := startAutomations()
+	t.Cleanup(stop)
+	r := newRouter()
+
+	// Nothing configured: the engine is asleep and asks for no samples.
+	if engine.NeedsSampling(types.SampleTPS) {
+		t.Error("an engine with no rules must not ask for TPS samples")
+	}
+
+	body := `{"server_id":"default","name":"reinicia com tps baixo","trigger_kind":"tps",
+	          "trigger_config":{"below":5,"held_for_seconds":300},
+	          "actions":[{"type":"backup"}]}`
+	if w := doWrite(r, http.MethodPost, "/api/automations", token, body); w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The engine learned about it from the write alone -- no restart, no boot.
+	if !engine.NeedsSampling(types.SampleTPS) {
+		t.Fatal("the engine did not pick up a rule saved through the API")
+	}
+
+	rules, _ := automation.ListRules()
+	if len(rules) != 1 {
+		t.Fatalf("expected one rule, got %d", len(rules))
+	}
+	id := strconv.Itoa(rules[0].ID)
+
+	if w := doWrite(r, http.MethodPost, "/api/automations/"+id+"/enabled", token, `{"enabled":false}`); w.Code != http.StatusOK {
+		t.Fatalf("disable: got %d: %s", w.Code, w.Body.String())
+	}
+	// And it stops measuring the moment the last rule that needed it is off.
+	if engine.NeedsSampling(types.SampleTPS) {
+		t.Error("the engine kept sampling for a rule that was disabled through the API")
 	}
 }

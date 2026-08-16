@@ -4,3 +4,6 @@ minecraft-server
 tmp/
 data/
 backups/
+# Stray token dumps from manual API testing. Never a thing to commit.
+jwt.txt
+*.jwt

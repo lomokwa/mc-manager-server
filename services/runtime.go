@@ -143,6 +143,22 @@ func DefaultRuntime() *ServerRuntime {
 // -- there is no code path where such a string ever reaches the filesystem.
 // Unlike DefaultRuntime, this never fabricates a runtime for an id that
 // doesn't exist in the registry.
+// AllRuntimes returns every loaded runtime, for callers that must act across
+// all servers rather than one -- the automation sampler and its "has this
+// player joined before" lookup are the first.
+//
+// Returns a fresh slice: the caller must not be able to reach the registry map
+// and mutate it while another goroutine reads.
+func AllRuntimes() []*ServerRuntime {
+	runtimesMu.RLock()
+	defer runtimesMu.RUnlock()
+	out := make([]*ServerRuntime, 0, len(runtimes))
+	for _, rt := range runtimes {
+		out = append(out, rt)
+	}
+	return out
+}
+
 func RuntimeForID(id string) (*ServerRuntime, error) {
 	s, err := GetServer(id)
 	if err != nil {

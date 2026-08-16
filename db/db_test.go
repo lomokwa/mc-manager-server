@@ -37,7 +37,7 @@ func TestInit_MigrationIsIdempotent(t *testing.T) {
 
 	// Re-running the migration against the same schema (via migrate) must
 	// not fail, since every CREATE TABLE uses IF NOT EXISTS.
-	if err := migrate(); err != nil {
+	if err := Migrate(); err != nil {
 		t.Errorf("expected re-running migrate to be a no-op, got error: %v", err)
 	}
 }

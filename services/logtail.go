@@ -109,7 +109,14 @@ func tailLoopFor(rt *ServerRuntime) {
 			if len(chunk) > 0 {
 				partial = append(partial, chunk...)
 				if partial[len(partial)-1] == '\n' {
-					rt.Hub.Broadcast(strings.TrimRight(string(partial), "\r\n"))
+					line := strings.TrimRight(string(partial), "\r\n")
+					rt.Hub.Broadcast(line)
+					// Live lines only -- the backlog replay above deliberately
+					// stays off the bus. HasSubscribers keeps this free when no
+					// automation engine is listening, which is the common case.
+					if types.Bus.HasSubscribers() {
+						types.Bus.Publish(types.ConsoleLineEvent{ServerID: rt.ID, Line: line, At: time.Now()})
+					}
 					partial = nil
 				}
 			}

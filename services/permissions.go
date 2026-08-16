@@ -21,9 +21,28 @@ func EnsureBuiltinRoles() error {
 		if err != nil {
 			return fmt.Errorf("marshal permissions for role %q: %w", r.Name, err)
 		}
+		// DO UPDATE, not DO NOTHING. A system role's permission list is defined
+		// in code (types.BuiltinRoles) and there is no route that edits one --
+		// GET /api/roles is read-only, and the two writable role endpoints
+		// assign a role to a user or set per-user overrides, neither of which
+		// touches this column. So the stored list can only ever have come from
+		// this statement, and DO NOTHING froze it at whatever the code said the
+		// first time the row was inserted.
+		//
+		// That made every future permission unreachable: adding one to the
+		// schema would leave it missing from the live Owner and Admin rows
+		// forever, so the feature it guards would be invisible to everyone
+		// including the owner, with nothing logged. Re-asserting the list each
+		// boot is what keeps code and database honest.
+		//
+		// Per-user overrides are stored separately and applied on top in
+		// EffectivePermissions, so someone explicitly denied a permission keeps
+		// that denial even as their role gains it. The is_system guard means a
+		// non-built-in role that happened to share a name would be left alone.
 		if _, err := db.DB.Exec(
 			`INSERT INTO roles (name, permissions, is_system) VALUES (?, ?, 1)
-			 ON CONFLICT(name) DO NOTHING`,
+			 ON CONFLICT(name) DO UPDATE SET permissions = excluded.permissions
+			 WHERE roles.is_system = 1`,
 			r.Name, string(perms),
 		); err != nil {
 			return fmt.Errorf("seed role %q: %w", r.Name, err)

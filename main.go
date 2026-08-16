@@ -14,6 +14,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/lomokwa/mc-manager/automation"
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/handlers"
 	"github.com/lomokwa/mc-manager/middleware"
@@ -87,6 +88,8 @@ func main() {
 	// Start the automatic backup scheduler
 	services.StartBackupScheduler()
 
+	startAutomations()
+
 	// Default to release mode (quieter, no debug overhead); set GIN_MODE=debug
 	// locally to get gin's verbose per-request logging during development.
 	if mode := os.Getenv("GIN_MODE"); mode != "" {
@@ -97,6 +100,46 @@ func main() {
 
 	r := newRouter()
 	r.Run()
+}
+
+// startAutomations boots the rule engine and connects it to the API. Split out
+// of main() for the same reason newRouter() is: main() cannot be called from a
+// test, and the one line that matters most here -- SetEngineReloader -- is
+// invisible to every other test in the suite. Without it a saved rule would sit
+// in the database doing nothing until the next deploy, which reads as a broken
+// feature rather than a stale cache, and nothing would fail to say so.
+//
+// Safe to start unconditionally: with no rules configured the engine returns
+// immediately from every event and the sampler measures nothing, so the server
+// behaves byte for byte as it did before automations shipped until someone
+// creates a first rule.
+//
+// Returns a stop func; main ignores it (the process exit is the stop) and tests
+// use it to shut the goroutines down.
+func startAutomations() (*automation.Engine, func()) {
+	engine := automation.NewEngine(types.Bus, func(serverID string) (automation.ActionRunner, error) {
+		rt, err := services.RuntimeForID(serverID)
+		if err != nil {
+			return nil, err
+		}
+		return automation.NewRuntimeRunner(rt), nil
+	})
+	if err := engine.ReloadRules(); err != nil {
+		// Not fatal: a broken rule row must not stop the panel from booting.
+		slog.Error("automations: failed to load rules", "err", err)
+	}
+	engine.Start()
+	stopSampler := services.StartSampler(engine.NeedsSampling, engine.TightestSampleWindow)
+
+	// The engine holds its rules in memory, so a write through the API has to
+	// tell it to re-read them.
+	handlers.SetEngineReloader(engine.ReloadRules)
+
+	return engine, func() {
+		stopSampler()
+		engine.Stop()
+		handlers.SetEngineReloader(nil)
+	}
 }
 
 // newRouter builds the full route table -- CORS, the rate limiter, auth
@@ -165,6 +208,29 @@ func newRouter() *gin.Engine {
 	api.PUT("/users/:id/role", perm(types.PermAdminManageRoles), handlers.SetUserRoleHandler)
 	api.PUT("/users/:id/overrides", perm(types.PermAdminManageRoles), handlers.SetUserOverridesHandler)
 
+	// Automations. Flat, not namespaced under /api/servers/:sid: a rule carries
+	// its own server_id, and one screen lists rules across every server.
+	//
+	// Webhooks get their OWN prefix rather than /automations/webhooks. Gin
+	// cannot route a static segment and a wildcard at the same position, so
+	// that path next to /automations/:id panics at registration -- taking the
+	// whole API down at boot instead of failing one endpoint.
+	api.GET("/automations", perm(types.PermAutomationsView), handlers.ListAutomationsHandler)
+	api.GET("/automations/:id", perm(types.PermAutomationsView), handlers.GetAutomationHandler)
+	api.GET("/automations/:id/firings", perm(types.PermAutomationsView), handlers.ListAutomationFiringsHandler)
+	api.GET("/automation-webhooks", perm(types.PermAutomationsView), handlers.ListAutomationWebhooksHandler)
+
+	// Writes need automations.manage, not automations.view. A rule can run
+	// console commands, so this permission is as powerful as console access --
+	// which is why the built-in Moderator role gets view and not manage.
+	api.POST("/automations", perm(types.PermAutomationsManage), handlers.CreateAutomationHandler)
+	api.PUT("/automations/:id", perm(types.PermAutomationsManage), handlers.UpdateAutomationHandler)
+	api.DELETE("/automations/:id", perm(types.PermAutomationsManage), handlers.DeleteAutomationHandler)
+	api.POST("/automations/:id/enabled", perm(types.PermAutomationsManage), handlers.SetAutomationEnabledHandler)
+	api.POST("/automation-webhooks", perm(types.PermAutomationsManage), handlers.CreateAutomationWebhookHandler)
+	api.DELETE("/automation-webhooks/:id", perm(types.PermAutomationsManage), handlers.DeleteAutomationWebhookHandler)
+	api.POST("/automation-webhooks/:id/test", perm(types.PermAutomationsManage), handlers.SendAutomationWebhookTestHandler)
+
 	// Minecraft account linking (self-service, no extra permission beyond login)
 	api.GET("/me/mclink", handlers.GetMcLinkHandler)
 	api.POST("/me/mclink/start", handlers.StartMcLinkHandler)
@@ -186,15 +252,19 @@ func newRouter() *gin.Engine {
 	// Server Health check
 	api.GET("/status", handlers.StatusHandler)
 
-	// Server registry (PLAN-multi-server.md D3): list every server, or
-	// inspect one, each with its live status folded in -- see
-	// handlers/servers.go. No extra permission beyond the JWT ValidateJWT
-	// already requires, same gate as GET /api/status just above; see
-	// ListServersHandler's own doc comment for why. GetServerHandler needs
-	// the same :sid -> runtime resolution (and 404-on-unknown-id) as the
-	// namespaced action routes below, so it also runs ResolveServer.
-	api.GET("/servers", handlers.ListServersHandler)
-	api.GET("/servers/:sid", middleware.ResolveServer(), handlers.GetServerHandler)
+	// Server registry (PLAN-multi-server.md D3): list every server, or inspect
+	// one, each with its live status folded in -- see handlers/servers.go.
+	// GetServerHandler needs the same :sid -> runtime resolution (and
+	// 404-on-unknown-id) as the namespaced action routes below, so it also
+	// runs ResolveServer.
+	//
+	// These were JWT-only until now. PermServersView is on every built-in role
+	// precisely so that stays true for everyone who has a role -- the gate is
+	// here for accounts that have NO role, which deny-by-default already locks
+	// out of players, console, files and everything else. Leaving one page
+	// readable to them was an inconsistency, not a feature.
+	api.GET("/servers", perm(types.PermServersView), handlers.ListServersHandler)
+	api.GET("/servers/:sid", perm(types.PermServersView), middleware.ResolveServer(), handlers.GetServerHandler)
 
 	// Namespaced per-server routes (PLAN-multi-server.md D3): the SAME
 	// handlers as their flat counterparts above, mounted under

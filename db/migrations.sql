@@ -78,3 +78,36 @@ CREATE TABLE IF NOT EXISTS servers (
   sort       INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS automation_webhooks (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT NOT NULL,
+  url          TEXT NOT NULL,
+  last_status  INTEGER,
+  last_error   TEXT,
+  last_used_at TIMESTAMP,
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS automation_rules (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id           TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name                TEXT NOT NULL,
+  enabled             INTEGER NOT NULL DEFAULT 1,
+  trigger_kind        TEXT NOT NULL,
+  trigger_config      TEXT NOT NULL DEFAULT '{}',
+  actions             TEXT NOT NULL,
+  cooldown_seconds    INTEGER NOT NULL DEFAULT 0,
+  stop_on_failure     INTEGER NOT NULL DEFAULT 1,
+  deaf_window_seconds INTEGER NOT NULL DEFAULT 5,
+  last_fired_at       TIMESTAMP,
+  created_by          INTEGER REFERENCES users(id),
+  created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS automation_firings (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id  INTEGER NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  fired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  trigger  TEXT NOT NULL,
+  outcome  TEXT NOT NULL
+);

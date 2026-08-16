@@ -18,10 +18,13 @@ func Init(path string) error {
 	if err != nil {
 		return err
 	}
-	return migrate()
+	return Migrate()
 }
 
-func migrate() error {
+// Migrate applies the embedded schema. Exported so a test can re-run exactly
+// what every API restart runs, which is what makes a migration rehearsal
+// against realistic data possible at all.
+func Migrate() error {
 	_, err := DB.Exec(migrations)
 	return err
 }

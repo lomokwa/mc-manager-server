@@ -14,6 +14,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/lomokwa/mc-manager/automation"
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/handlers"
 	"github.com/lomokwa/mc-manager/middleware"
@@ -86,6 +87,24 @@ func main() {
 
 	// Start the automatic backup scheduler
 	services.StartBackupScheduler()
+
+	// Automations. Safe to start unconditionally: with no rules configured the
+	// engine returns immediately from every event and the sampler measures
+	// nothing, so the server behaves byte for byte as it did before this
+	// shipped until someone creates a first rule.
+	engine := automation.NewEngine(types.Bus, func(serverID string) (automation.ActionRunner, error) {
+		rt, err := services.RuntimeForID(serverID)
+		if err != nil {
+			return nil, err
+		}
+		return automation.NewRuntimeRunner(rt), nil
+	})
+	if err := engine.ReloadRules(); err != nil {
+		// Not fatal: a broken rule row must not stop the panel from booting.
+		slog.Error("automations: failed to load rules", "err", err)
+	}
+	engine.Start()
+	services.StartSampler(engine.NeedsSampling, engine.TightestSampleWindow)
 
 	// Default to release mode (quieter, no debug overhead); set GIN_MODE=debug
 	// locally to get gin's verbose per-request logging during development.

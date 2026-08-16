@@ -28,6 +28,20 @@ func (rt *ServerRuntime) SendCommand(cmd string) error {
 	return writeFifo(rt.ConsoleFifoPath(), cmd+"\n")
 }
 
+// RestartServerProcess asks mc-supervisor to cycle the JVM. The supervisor has
+// always understood the RESTART verb (see cmd/supervisor); nothing in Go had an
+// exported path to it until the automation restart action needed one.
+//
+// Refuses when the server is already down: RESTART on a stopped server would
+// START it, which is the opposite of what a rule that says "restart" means --
+// and it would silently undo an operator's deliberate shutdown.
+func (rt *ServerRuntime) RestartServerProcess() error {
+	if !rt.IsServerRunning() {
+		return fmt.Errorf("server is not running")
+	}
+	return rt.writeControl("RESTART")
+}
+
 // ReadStatus reads and decodes this runtime's raw status file as
 // mc-supervisor last wrote it. Exported (not just an IsServerRunning
 // implementation detail) because handlers/servers.go's server list needs

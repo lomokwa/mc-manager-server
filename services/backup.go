@@ -70,9 +70,20 @@ func (rt *ServerRuntime) resolveBackupPath(name string) (string, error) {
 
 // CreateBackup snapshots this runtime's world directory (plus key config
 // files) into a new timestamped zip archive under its BackupDir.
-func (rt *ServerRuntime) CreateBackup() (types.BackupInfo, error) {
+func (rt *ServerRuntime) CreateBackup() (created types.BackupInfo, err error) {
 	rt.backupMu.Lock()
 	defer rt.backupMu.Unlock()
+
+	// Announce the outcome from a defer on named returns rather than at each
+	// exit. This function has six of them today, and the seventh someone adds
+	// tomorrow would otherwise be the one that silently stops notifying.
+	defer func() {
+		ev := types.BackupEvent{ServerID: rt.ID, Name: created.Name, At: time.Now()}
+		if err != nil {
+			ev.Failed, ev.Err = true, err.Error()
+		}
+		types.Bus.Publish(ev)
+	}()
 
 	worldPath := filepath.Join(rt.Dir, "world")
 	if !utils.FileExists(worldPath) {

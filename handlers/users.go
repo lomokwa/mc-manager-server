@@ -100,6 +100,69 @@ func UpdateProfileHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: user})
 }
 
+// UpdateEmailHandler lets the caller set or clear their own email address --
+// self-service, same pattern as UpdateProfileHandler, but a separate
+// endpoint so saving it never touches display_name (and vice versa).
+func UpdateEmailHandler(c *gin.Context) {
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, types.APIResponse{Error: "missing or invalid session"})
+		return
+	}
+
+	var req types.UpdateEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "invalid request body"})
+		return
+	}
+
+	if err := types.ValidateEmail(req.Email); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	if err := services.UpdateEmail(userID, req.Email); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	user, err := services.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, types.APIResponse{Error: "user not found"})
+		return
+	}
+	c.JSON(http.StatusOK, types.APIResponse{Success: true, Data: user})
+}
+
+// ChangePasswordHandler lets the caller rotate their own password after
+// proving they know the current one -- self-service, same auth pattern as
+// GetMeHandler.
+func ChangePasswordHandler(c *gin.Context) {
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, types.APIResponse{Error: "missing or invalid session"})
+		return
+	}
+
+	var req types.ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "current_password and new_password are required"})
+		return
+	}
+
+	if err := types.ValidatePassword(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	if err := services.ChangePassword(userID, req.CurrentPassword, req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, types.APIResponse{Success: true})
+}
+
 func GetUsersHandler(c *gin.Context) {
 	users, err := services.GetUsers()
 	if err != nil {

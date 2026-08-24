@@ -158,6 +158,8 @@ func newRouter() *gin.Engine {
 
 	api.GET("/me", handlers.GetMeHandler)
 	api.PATCH("/me", handlers.UpdateProfileHandler)
+	api.PATCH("/me/email", handlers.UpdateEmailHandler)
+	api.POST("/me/password", handlers.ChangePasswordHandler)
 	api.POST("/me/avatar", handlers.UploadAvatarHandler)
 	api.DELETE("/me/avatar", handlers.DeleteAvatarHandler)
 

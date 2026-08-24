@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/types"
 )
@@ -165,6 +166,162 @@ func TestGetUsersHandler_Success(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if len(resp.Data) != 1 || resp.Data[0].Username != "alice" {
 		t.Errorf("expected one user 'alice', got %+v", resp.Data)
+	}
+}
+
+func TestUpdateEmailHandler_Success(t *testing.T) {
+	setupTestDB(t)
+	_, r := withUser(t, "emailuser1", "")
+	r.PATCH("/me/email", UpdateEmailHandler)
+
+	req := httptest.NewRequest(http.MethodPatch, "/me/email", strings.NewReader(`{"email": "emailuser1@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data types.User `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Data.Email != "emailuser1@example.com" {
+		t.Errorf("expected email to be set, got %q", resp.Data.Email)
+	}
+}
+
+func TestUpdateEmailHandler_RejectsMalformed(t *testing.T) {
+	setupTestDB(t)
+	_, r := withUser(t, "emailuser2", "")
+	r.PATCH("/me/email", UpdateEmailHandler)
+
+	req := httptest.NewRequest(http.MethodPatch, "/me/email", strings.NewReader(`{"email": "not-an-email"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateEmailHandler_Unauthorized(t *testing.T) {
+	setupTestDB(t)
+	r := newTestRouter()
+	r.PATCH("/me/email", UpdateEmailHandler)
+
+	req := httptest.NewRequest(http.MethodPatch, "/me/email", strings.NewReader(`{"email": "nobody@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestChangePasswordHandler_WrongCurrentPassword(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	registerRouter := newTestRouter()
+	registerRouter.POST("/invitations", CreateInvitationHandler)
+	registerRouter.POST("/register", RegisterHandler)
+	w := httptest.NewRecorder()
+	registerRouter.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/invitations", nil))
+	var createResp struct {
+		Data types.Invitation `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &createResp)
+	regBody := `{"token": "` + createResp.Data.Token + `", "username": "pwuser1", "password": "correctpw"}`
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(regBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	registerRouter.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("setup: expected register to succeed, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var id int
+	if err := db.DB.QueryRow("SELECT id FROM users WHERE username = ?", "pwuser1").Scan(&id); err != nil {
+		t.Fatalf("failed to look up registered user: %v", err)
+	}
+
+	r := newTestRouter()
+	r.Use(func(c *gin.Context) {
+		c.Set("userID", float64(id))
+		c.Next()
+	})
+	r.POST("/me/password", ChangePasswordHandler)
+
+	body := `{"current_password": "wrongpw", "new_password": "newpassword"}`
+	req = httptest.NewRequest(http.MethodPost, "/me/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestChangePasswordHandler_Success(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	registerRouter := newTestRouter()
+	registerRouter.POST("/invitations", CreateInvitationHandler)
+	registerRouter.POST("/register", RegisterHandler)
+	w := httptest.NewRecorder()
+	registerRouter.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/invitations", nil))
+	var createResp struct {
+		Data types.Invitation `json:"data"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &createResp)
+	regBody := `{"token": "` + createResp.Data.Token + `", "username": "pwuser2", "password": "correctpw"}`
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(regBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	registerRouter.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("setup: expected register to succeed, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var id int
+	if err := db.DB.QueryRow("SELECT id FROM users WHERE username = ?", "pwuser2").Scan(&id); err != nil {
+		t.Fatalf("failed to look up registered user: %v", err)
+	}
+
+	r := newTestRouter()
+	r.Use(func(c *gin.Context) {
+		c.Set("userID", float64(id))
+		c.Next()
+	})
+	r.POST("/me/password", ChangePasswordHandler)
+
+	body := `{"current_password": "correctpw", "new_password": "newpassword"}`
+	req = httptest.NewRequest(http.MethodPost, "/me/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	loginRouter := newTestRouter()
+	loginRouter.POST("/login", LoginHandler)
+	loginBody := `{"username": "pwuser2", "password": "newpassword"}`
+	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(loginBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	loginRouter.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected login with new password to succeed, got %d, body=%s", w.Code, w.Body.String())
 	}
 }
 

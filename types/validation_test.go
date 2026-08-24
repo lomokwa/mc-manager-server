@@ -104,3 +104,49 @@ func TestValidateServerProperties_AllBoolKeysAcceptTrueFalse(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateEmail_EmptyClearsIsValid(t *testing.T) {
+	if err := ValidateEmail(""); err != nil {
+		t.Errorf("expected empty email to be valid (clears it), got %v", err)
+	}
+}
+
+func TestValidateEmail_ValidAddress(t *testing.T) {
+	if err := ValidateEmail("user@example.com"); err != nil {
+		t.Errorf("expected valid email to pass, got %v", err)
+	}
+}
+
+func TestValidateEmail_RejectsMalformed(t *testing.T) {
+	cases := []string{"not-an-email", "missing-domain@", "@missing-local.com", "spaces in@example.com"}
+	for _, email := range cases {
+		if err := ValidateEmail(email); err == nil {
+			t.Errorf("expected %q to be rejected as invalid", email)
+		}
+	}
+}
+
+func TestValidateEmail_RejectsDisplayNameSyntax(t *testing.T) {
+	if err := ValidateEmail("Name <user@example.com>"); err == nil {
+		t.Error("expected display-name-wrapped address to be rejected")
+	}
+}
+
+func TestValidateEmail_RejectsTooLong(t *testing.T) {
+	long := strings.Repeat("a", 250) + "@example.com"
+	if err := ValidateEmail(long); err == nil {
+		t.Error("expected an overly long email to be rejected")
+	}
+}
+
+func TestValidatePassword_TooShort(t *testing.T) {
+	if err := ValidatePassword("abc12"); err == nil {
+		t.Error("expected a 5-character password to be rejected")
+	}
+}
+
+func TestValidatePassword_MinimumLengthAccepted(t *testing.T) {
+	if err := ValidatePassword("abc123"); err != nil {
+		t.Errorf("expected a 6-character password to be valid, got %v", err)
+	}
+}

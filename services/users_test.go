@@ -215,3 +215,108 @@ func TestGetUsers_ReturnsCreatedUsers(t *testing.T) {
 		t.Errorf("expected one user 'frank', got %+v", users)
 	}
 }
+
+func registerTestUser(t *testing.T, username, password string) int {
+	t.Helper()
+	inv, err := CreateInvitation()
+	if err != nil {
+		t.Fatalf("failed to create invitation: %v", err)
+	}
+	if err := Register(types.RegisterRequest{Token: inv.Token, Username: username, Password: password}); err != nil {
+		t.Fatalf("failed to register: %v", err)
+	}
+	var id int
+	if err := db.DB.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&id); err != nil {
+		t.Fatalf("failed to look up registered user: %v", err)
+	}
+	return id
+}
+
+func TestUpdateEmail_SetsEmail(t *testing.T) {
+	setupTestDB(t)
+	id := registerTestUser(t, "gina", "pw")
+
+	if err := UpdateEmail(id, "gina@example.com"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	user, err := GetUserByID(id)
+	if err != nil {
+		t.Fatalf("failed to fetch user: %v", err)
+	}
+	if user.Email != "gina@example.com" {
+		t.Errorf("expected email to be set, got %q", user.Email)
+	}
+}
+
+func TestUpdateEmail_ClearsEmail(t *testing.T) {
+	setupTestDB(t)
+	id := registerTestUser(t, "hank", "pw")
+
+	if err := UpdateEmail(id, "hank@example.com"); err != nil {
+		t.Fatalf("failed to set email: %v", err)
+	}
+	if err := UpdateEmail(id, ""); err != nil {
+		t.Fatalf("expected no error clearing email, got %v", err)
+	}
+
+	user, err := GetUserByID(id)
+	if err != nil {
+		t.Fatalf("failed to fetch user: %v", err)
+	}
+	if user.Email != "" {
+		t.Errorf("expected email to be cleared, got %q", user.Email)
+	}
+}
+
+func TestUpdateEmail_MultipleUsersCanLeaveEmailUnset(t *testing.T) {
+	setupTestDB(t)
+	id1 := registerTestUser(t, "ivan", "pw")
+	id2 := registerTestUser(t, "jill", "pw")
+
+	if err := UpdateEmail(id1, ""); err != nil {
+		t.Fatalf("expected no error for first user, got %v", err)
+	}
+	if err := UpdateEmail(id2, ""); err != nil {
+		t.Fatalf("expected no error for second user with unset email too, got %v", err)
+	}
+}
+
+func TestUpdateEmail_DuplicateRejected(t *testing.T) {
+	setupTestDB(t)
+	id1 := registerTestUser(t, "ken", "pw")
+	id2 := registerTestUser(t, "liz", "pw")
+
+	if err := UpdateEmail(id1, "shared@example.com"); err != nil {
+		t.Fatalf("failed to set first user's email: %v", err)
+	}
+	if err := UpdateEmail(id2, "shared@example.com"); err == nil {
+		t.Error("expected an error assigning a duplicate email")
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword(t *testing.T) {
+	setupTestDB(t)
+	id := registerTestUser(t, "mona", "correctpw")
+
+	if err := ChangePassword(id, "wrongpw", "newpassword"); err == nil {
+		t.Error("expected an error for the wrong current password")
+	}
+}
+
+func TestChangePassword_Success(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+	id := registerTestUser(t, "nora", "correctpw")
+
+	if err := ChangePassword(id, "correctpw", "newpassword"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if _, err := Login(types.LoginRequest{Username: "nora", Password: "correctpw"}); err == nil {
+		t.Error("expected the old password to no longer work")
+	}
+	if _, err := Login(types.LoginRequest{Username: "nora", Password: "newpassword"}); err != nil {
+		t.Errorf("expected the new password to work, got %v", err)
+	}
+}

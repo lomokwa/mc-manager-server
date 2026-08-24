@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"net/mail"
 	"strings"
 )
 
@@ -95,6 +96,33 @@ func ValidateDisplayName(name string) error {
 	}
 	if strings.ContainsAny(name, "\r\n\t") {
 		return fmt.Errorf("display name must not contain control characters")
+	}
+	return nil
+}
+
+// ValidateEmail allows a caller to clear their email (empty string) or set
+// it to a syntactically valid address. Uses net/mail's parser rather than a
+// hand-rolled regex since it already implements RFC 5322 address parsing.
+func ValidateEmail(email string) error {
+	if email == "" {
+		return nil
+	}
+	if len(email) > 255 {
+		return fmt.Errorf("email must be 255 characters or fewer")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return fmt.Errorf("invalid email address")
+	}
+	return nil
+}
+
+// ValidatePassword enforces the same minimum length the frontend already
+// checks at registration, so the API rejects a weak password even when
+// called directly rather than through the client's form.
+func ValidatePassword(password string) error {
+	if len(password) < 6 {
+		return fmt.Errorf("password must be at least 6 characters")
 	}
 	return nil
 }

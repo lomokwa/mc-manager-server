@@ -2,7 +2,9 @@ package services
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/lomokwa/mc-manager/db"
 	"github.com/lomokwa/mc-manager/types"
+	"github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -122,7 +125,7 @@ func Login(req types.LoginRequest) (string, error) {
 }
 
 func GetUsers() ([]types.User, error) {
-	rows, err := db.DB.Query("SELECT id, username, display_name, avatar_filename, created_at FROM users")
+	rows, err := db.DB.Query("SELECT id, username, email, display_name, avatar_filename, created_at FROM users")
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +135,13 @@ func GetUsers() ([]types.User, error) {
 	for rows.Next() {
 		var (
 			u        types.User
+			email    sql.NullString
 			avatarFN string
 		)
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &avatarFN, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &email, &u.DisplayName, &avatarFN, &u.CreatedAt); err != nil {
 			return nil, err
 		}
+		u.Email = email.String
 		u.AvatarURL = avatarURL(avatarFN)
 		users = append(users, u)
 	}
@@ -151,10 +156,12 @@ func GetUsers() ([]types.User, error) {
 func GetUserByID(id int) (types.User, error) {
 	var (
 		u        types.User
+		email    sql.NullString
 		avatarFN string
 	)
-	err := db.DB.QueryRow("SELECT id, username, display_name, avatar_filename, created_at FROM users WHERE id = ?", id).
-		Scan(&u.ID, &u.Username, &u.DisplayName, &avatarFN, &u.CreatedAt)
+	err := db.DB.QueryRow("SELECT id, username, email, display_name, avatar_filename, created_at FROM users WHERE id = ?", id).
+		Scan(&u.ID, &u.Username, &email, &u.DisplayName, &avatarFN, &u.CreatedAt)
+	u.Email = email.String
 	u.AvatarURL = avatarURL(avatarFN)
 	return u, err
 }
@@ -164,6 +171,51 @@ func GetUserByID(id int) (types.User, error) {
 func UpdateDisplayName(userID int, displayName string) error {
 	_, err := db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", displayName, userID)
 	return err
+}
+
+// UpdateEmail sets the caller's email address. An empty string clears it by
+// storing SQL NULL rather than "" -- the column is UNIQUE, and SQLite only
+// treats NULLs as distinct from each other, so storing "" would let at most
+// one user ever leave their email unset.
+func UpdateEmail(userID int, email string) error {
+	var value sql.NullString
+	if email != "" {
+		value = sql.NullString{String: email, Valid: true}
+	}
+	_, err := db.DB.Exec("UPDATE users SET email = ? WHERE id = ?", value, userID)
+	if isUniqueConstraintErr(err) {
+		return fmt.Errorf("that email is already in use")
+	}
+	return err
+}
+
+// ChangePassword verifies the caller's current password against the stored
+// hash (same bcrypt check as Login) before rotating password_hash to the new
+// one (same bcrypt cost as Register).
+func ChangePassword(userID int, currentPassword, newPassword string) error {
+	var passwordHash string
+	if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", userID).Scan(&passwordHash); err != nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(currentPassword)); err != nil {
+		return fmt.Errorf("current password is incorrect")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	_, err = db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userID)
+	return err
+}
+
+// isUniqueConstraintErr reports whether err came from violating a UNIQUE
+// column constraint (e.g. two users' email addresses colliding).
+func isUniqueConstraintErr(err error) bool {
+	var sqliteErr sqlite3.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
 }
 
 // avatarURL turns a stored avatar_filename into the path the frontend fetches

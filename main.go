@@ -209,15 +209,19 @@ func newRouter() *gin.Engine {
 	// Server Health check
 	api.GET("/status", handlers.StatusHandler)
 
-	// Server registry (PLAN-multi-server.md D3): list every server, or
-	// inspect one, each with its live status folded in -- see
-	// handlers/servers.go. No extra permission beyond the JWT ValidateJWT
-	// already requires, same gate as GET /api/status just above; see
-	// ListServersHandler's own doc comment for why. GetServerHandler needs
-	// the same :sid -> runtime resolution (and 404-on-unknown-id) as the
-	// namespaced action routes below, so it also runs ResolveServer.
-	api.GET("/servers", handlers.ListServersHandler)
-	api.GET("/servers/:sid", middleware.ResolveServer(), handlers.GetServerHandler)
+	// Server registry (PLAN-multi-server.md D3): list every server, or inspect
+	// one, each with its live status folded in -- see handlers/servers.go.
+	// GetServerHandler needs the same :sid -> runtime resolution (and
+	// 404-on-unknown-id) as the namespaced action routes below, so it also
+	// runs ResolveServer.
+	//
+	// These were JWT-only until now. PermServersView is on every built-in role
+	// precisely so that stays true for everyone who has a role -- the gate is
+	// here for accounts that have NO role, which deny-by-default already locks
+	// out of players, console, files and everything else. Leaving one page
+	// readable to them was an inconsistency, not a feature.
+	api.GET("/servers", perm(types.PermServersView), handlers.ListServersHandler)
+	api.GET("/servers/:sid", perm(types.PermServersView), middleware.ResolveServer(), handlers.GetServerHandler)
 
 	// Namespaced per-server routes (PLAN-multi-server.md D3): the SAME
 	// handlers as their flat counterparts above, mounted under

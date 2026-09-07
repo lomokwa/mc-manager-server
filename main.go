@@ -112,6 +112,11 @@ func newRouter() *gin.Engine {
 	// from the logged URL. Recovery is kept exactly as before.
 	r := gin.New()
 	r.Use(requestLogger(), gin.Recovery())
+	// After Recovery so a panicking handler still yields a row, and before
+	// the route groups so it sees every mutation regardless of which group
+	// served it. It only records state-changing requests -- see
+	// middleware.RecordActivity for why GETs are excluded.
+	r.Use(middleware.RecordActivity())
 
 	// Cors config
 	r.Use(cors.New(cors.Config{
@@ -163,6 +168,11 @@ func newRouter() *gin.Engine {
 	api.POST("/me/avatar", handlers.UploadAvatarHandler)
 	api.DELETE("/me/avatar", handlers.DeleteAvatarHandler)
 
+	// Audit trail. Gated on its own permission because it exposes who did
+	// what -- more than a Viewer should see, which is why activity.view is
+	// not on the Viewer or Operator roles.
+	api.GET("/activity", perm(types.PermActivityView), handlers.ListActivityHandler)
+
 	// Permissions & roles
 	api.GET("/permissions/schema", handlers.PermissionSchemaHandler)
 	api.GET("/me/permissions", handlers.MyPermissionsHandler)
@@ -209,15 +219,19 @@ func newRouter() *gin.Engine {
 	// Server Health check
 	api.GET("/status", handlers.StatusHandler)
 
-	// Server registry (PLAN-multi-server.md D3): list every server, or
-	// inspect one, each with its live status folded in -- see
-	// handlers/servers.go. No extra permission beyond the JWT ValidateJWT
-	// already requires, same gate as GET /api/status just above; see
-	// ListServersHandler's own doc comment for why. GetServerHandler needs
-	// the same :sid -> runtime resolution (and 404-on-unknown-id) as the
-	// namespaced action routes below, so it also runs ResolveServer.
-	api.GET("/servers", handlers.ListServersHandler)
-	api.GET("/servers/:sid", middleware.ResolveServer(), handlers.GetServerHandler)
+	// Server registry (PLAN-multi-server.md D3): list every server, or inspect
+	// one, each with its live status folded in -- see handlers/servers.go.
+	// GetServerHandler needs the same :sid -> runtime resolution (and
+	// 404-on-unknown-id) as the namespaced action routes below, so it also
+	// runs ResolveServer.
+	//
+	// These were JWT-only until now. PermServersView is on every built-in role
+	// precisely so that stays true for everyone who has a role -- the gate is
+	// here for accounts that have NO role, which deny-by-default already locks
+	// out of players, console, files and everything else. Leaving one page
+	// readable to them was an inconsistency, not a feature.
+	api.GET("/servers", perm(types.PermServersView), handlers.ListServersHandler)
+	api.GET("/servers/:sid", perm(types.PermServersView), middleware.ResolveServer(), handlers.GetServerHandler)
 
 	// Namespaced per-server routes (PLAN-multi-server.md D3): the SAME
 	// handlers as their flat counterparts above, mounted under

@@ -78,3 +78,30 @@ CREATE TABLE IF NOT EXISTS servers (
   sort       INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Audit trail: who did what on the panel, so "who banned this player?" is a
+-- lookup rather than a hunt through the console log.
+--
+-- username is denormalised on purpose. The whole value of an audit row is that
+-- it still reads correctly later, and a JOIN to users would blank out the
+-- moment an account is removed -- exactly when you most want to know what it
+-- did. user_id is kept alongside it for grouping, and is NULL for API-key
+-- callers, which have no user.
+--
+-- No query strings are ever stored (see services/activity.go): the API key and
+-- the console JWT both travel as query params, so the only way to guarantee
+-- this table can't become a credential leak is to never put a URL in it.
+CREATE TABLE IF NOT EXISTS activity_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  user_id    INTEGER,
+  username   TEXT NOT NULL,
+  category   TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  detail     TEXT,
+  status     INTEGER NOT NULL DEFAULT 0,
+  server_id  TEXT
+);
+
+-- Every read of this table is "newest first, optionally one category".
+CREATE INDEX IF NOT EXISTS idx_activity_recent ON activity_log(id DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category, id DESC);

@@ -41,3 +41,19 @@ func RequirePermission(perm types.Permission) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// UsernameFromContext extracts the JWT-authenticated caller's username, set by
+// ValidateJWT as claims["username"]. Used by the audit trail, which stores the
+// name rather than joining to users: an audit row has to keep reading
+// correctly after an account is deleted, which is exactly when it matters most.
+func UsernameFromContext(c *gin.Context) (string, bool) {
+	raw, exists := c.Get("username")
+	if !exists {
+		return "", false
+	}
+	name, ok := raw.(string)
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
+}

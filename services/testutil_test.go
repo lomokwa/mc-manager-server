@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,4 +77,21 @@ func setupTestDB(t *testing.T) {
 func clearStatusFile(t *testing.T) {
 	t.Helper()
 	os.Remove(StatusFilePath)
+}
+
+// captureLog runs fn with the standard logger redirected into a buffer and
+// returns whatever it wrote, so a test can assert on a warning that has no
+// return value to inspect.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}()
+	fn()
+	return buf.String()
 }

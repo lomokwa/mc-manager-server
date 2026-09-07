@@ -241,3 +241,71 @@ func TestEnsureBootstrapOwner_NoUsersAtAll(t *testing.T) {
 		t.Errorf("expected no role assignments with zero registered users, got %d", count)
 	}
 }
+
+// The rollout failure this exists to prevent: the seed named every human, so
+// EnsureBootstrapOwner correctly stood down, and the Discord bot's service
+// account was quietly left with no role -- 403 on every gated route, with
+// nothing in the logs pointing at it. The audit has to notice exactly that
+// shape: some accounts covered, one not.
+func TestWarnAboutRolelessAccounts_NamesOnlyTheUncovered(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	insertTestUser(t, "lomokwa")
+	insertTestUser(t, "Ant")
+	insertTestUser(t, "selton-bot")
+	withSeedFile(t, `{"users":[{"username":"lomokwa","role":"Owner"},{"username":"Ant","role":"Admin"}]}`)
+
+	ApplyPermissionsSeed()
+	EnsureBootstrapOwner() // a no-op here: the seed already gave someone a role
+
+	logged := captureLog(t, WarnAboutRolelessAccounts)
+
+	if !strings.Contains(logged, "selton-bot") {
+		t.Errorf("expected the roleless account to be named, got: %s", logged)
+	}
+	if strings.Contains(logged, "lomokwa") || strings.Contains(logged, "Ant,") {
+		t.Errorf("expected accounts WITH a role to be left out, got: %s", logged)
+	}
+}
+
+func TestWarnAboutRolelessAccounts_SilentWhenEveryoneIsCovered(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	insertTestUser(t, "lomokwa")
+	withSeedFile(t, `{"users":[{"username":"lomokwa","role":"Owner"}]}`)
+	ApplyPermissionsSeed()
+
+	if logged := captureLog(t, WarnAboutRolelessAccounts); logged != "" {
+		t.Errorf("expected no warning when every account has a role, got: %s", logged)
+	}
+}
+
+// It must never hand out a role on its own -- that would be the silent
+// privilege grant deny-by-default exists to prevent.
+func TestWarnAboutRolelessAccounts_GrantsNothing(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	insertTestUser(t, "lomokwa")
+	botID := insertTestUser(t, "selton-bot")
+	withSeedFile(t, `{"users":[{"username":"lomokwa","role":"Owner"}]}`)
+	ApplyPermissionsSeed()
+
+	WarnAboutRolelessAccounts()
+
+	perms, err := EffectivePermissions(botID)
+	if err != nil {
+		t.Fatalf("EffectivePermissions failed: %v", err)
+	}
+	if perms.RoleName != "" {
+		t.Errorf("the audit must only warn, but selton-bot came out with role %q", perms.RoleName)
+	}
+}

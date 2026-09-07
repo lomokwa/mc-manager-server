@@ -64,6 +64,10 @@ func main() {
 	// listed users haven't registered yet), don't leave every account
 	// deny-by-default the moment this deploys -- see EnsureBootstrapOwner.
 	services.EnsureBootstrapOwner()
+	// Whatever the two above didn't cover, say so out loud. An account with no
+	// role logs in fine and is then refused on every gated route, which from
+	// the outside just looks like the panel is broken -- see WarnAboutRolelessAccounts.
+	services.WarnAboutRolelessAccounts()
 
 	// Seed the server registry (idempotent no-op after the first boot -- see
 	// EnsureDefaultServer) and build the per-server runtime map from it. This

@@ -185,6 +185,7 @@ func newRouter() *gin.Engine {
 	r.GET("/api/invitations/:token", handlers.ValidateInvitationHandler)
 	r.POST("/api/register", handlers.RegisterHandler)
 	r.POST("/api/login", handlers.LoginHandler)
+	r.POST("/api/forgot-password", handlers.ForgotPasswordHandler)
 
 	// Profile pictures: served statically and unauthenticated, like any other
 	// avatar image (a browser <img> tag can't attach an Authorization header

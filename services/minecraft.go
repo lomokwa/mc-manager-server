@@ -205,6 +205,39 @@ func PrepareServerFiles(serverDir string, createLaunchScript bool, configureProp
 	return nil
 }
 
+// loadUserCache reads the name<->UUID cache Minecraft keeps in usercache.json,
+// returning nil rather than an error when it can't.
+//
+// Every other file the player listing reads already degrades to "empty" when
+// it's missing; usercache.json was the one exception, and it failed the whole
+// call -- which ListPlayersHandler turns into a 500. That's a full outage for
+// both consumers at once: the panel's Players page, and the Discord bot, whose
+// status line reads this endpoint. Two ordinary situations reach it. A server
+// nobody has joined yet has no usercache.json at all. And Minecraft rewrites
+// the file periodically, so a read can catch it mid-write and get truncated
+// JSON.
+//
+// Neither means the server is unreachable -- the online list, op flags and ban
+// flags are all still perfectly readable. Missing is silent (that's just a new
+// server); unreadable or malformed is logged, since that one may be worth
+// seeing even though it no longer takes the endpoint down.
+func (rt *ServerRuntime) loadUserCache() []types.UserCacheEntry {
+	data, err := os.ReadFile(filepath.Join(rt.Dir, "usercache.json"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("could not read usercache.json, listing players without it", "err", err)
+		}
+		return nil
+	}
+
+	var entries []types.UserCacheEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		slog.Warn("usercache.json is not valid JSON, listing players without it", "err", err)
+		return nil
+	}
+	return entries
+}
+
 func (rt *ServerRuntime) loadUUIDs(filename string) (map[string]bool, error) {
 	data, err := os.ReadFile(filepath.Join(rt.Dir, filename))
 	if err != nil {
@@ -218,7 +251,12 @@ func (rt *ServerRuntime) loadUUIDs(filename string) (map[string]bool, error) {
 		UUID string `json:"uuid"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("failed to decode %s: %w", filename, err)
+		// Same reasoning as loadUserCache: these files are rewritten live by the
+		// server, and one bad read shouldn't blank the whole player list.
+		// Degrading to an empty set fails in the safe direction -- an op reads
+		// as not-an-op, so permission checks built on this deny rather than allow.
+		slog.Warn("could not decode a player list file, treating it as empty", "file", filename, "err", err)
+		return make(map[string]bool), nil
 	}
 
 	set := make(map[string]bool, len(entries))
@@ -417,15 +455,7 @@ draining:
 }
 
 func (rt *ServerRuntime) ListPlayers() ([]types.Player, error) {
-	data, err := os.ReadFile(filepath.Join(rt.Dir, "usercache.json"))
-	if err != nil {
-		return nil, err
-	}
-
-	var userCache []types.UserCacheEntry
-	if err := json.Unmarshal(data, &userCache); err != nil {
-		return nil, fmt.Errorf("failed to decode usercache.json: %w", err)
-	}
+	userCache := rt.loadUserCache()
 
 	// Load status set
 	opSet, err := rt.loadUUIDs("ops.json")

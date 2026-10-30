@@ -154,10 +154,10 @@ func TestFlatRoutes_StillRouteAndMatchDefaultServer(t *testing.T) {
 // selton-mello-bot calls this exact flat endpoint in production. An
 // unauthenticated request must still 401 (ValidateJWT still gates it
 // through the api group, unchanged), and an authenticated one must still
-// reach ListPlayersHandler -- proven by getting the SAME 500 the handler
-// already returns with no usercache.json on disk (see
-// handlers.TestListPlayersHandler_MissingUserCache), not a 404 that would
-// mean the route stopped resolving.
+// reach ListPlayersHandler -- proven by getting the handler's own answer for
+// an empty server dir (200 with an empty list, see
+// handlers.TestListPlayersHandler_MissingUserCacheIsAnEmptyList), not a 404
+// that would mean the route stopped resolving.
 func TestFlatRoutes_PlayersStillRoutesAndRequiresAuth(t *testing.T) {
 	setupTestDB(t)
 	setupServerDir(t)
@@ -173,8 +173,8 @@ func TestFlatRoutes_PlayersStillRoutesAndRequiresAuth(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	token := newTestUserToken(t, "players-viewer", "Operator") // Operator has players.view
 	authed := doRequest(r, http.MethodGet, "/api/players", token)
-	if authed.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 (matches ListPlayersHandler's own missing-usercache behavior), got %d, body=%s", authed.Code, authed.Body.String())
+	if authed.Code != http.StatusOK {
+		t.Errorf("expected 200 (matches ListPlayersHandler's own empty-server-dir behavior), got %d, body=%s", authed.Code, authed.Body.String())
 	}
 }
 

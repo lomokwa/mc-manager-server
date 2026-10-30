@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lomokwa/mc-manager/db"
 )
@@ -123,4 +124,54 @@ func applySeedEntry(entry seedEntry) {
 		return
 	}
 	slog.Info("permissions seed: role assigned", "user", entry.Username, "role", entry.Role)
+}
+
+// WarnAboutRolelessAccounts names, at boot, every account the seed and the
+// bootstrap owner both left without a role. Those accounts can log in and get
+// a perfectly valid token, then be refused by RequirePermission on every route
+// that needs one -- which reads, from the outside, as the panel being broken.
+//
+// This actually happened on the rollout: the seed named the humans, so
+// EnsureBootstrapOwner correctly stayed out of the way, and the SERVICE
+// account the Discord bot logs in with was simply never on anyone's list. The
+// bot went to a 403 on /api/players and reported "servidor indisponível" --
+// which is what it looks like from there. Nothing in the logs said why.
+//
+// It deliberately only warns. Handing a role to an unknown account
+// automatically is exactly the silent privilege grant deny-by-default exists
+// to prevent; the operator seeing the name is enough, since the panel's Users
+// page can fix it in two clicks.
+func WarnAboutRolelessAccounts() {
+	rows, err := db.DB.Query(`
+		SELECT u.username FROM users u
+		LEFT JOIN user_roles ur ON ur.user_id = u.id
+		WHERE ur.user_id IS NULL
+		ORDER BY u.id ASC`)
+	if err != nil {
+		slog.Error("role audit: could not check for accounts without a role", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			slog.Error("role audit: could not read a username", "err", err)
+			return
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("role audit: could not read the account list", "err", err)
+		return
+	}
+
+	if len(names) == 0 {
+		return
+	}
+	slog.Warn("role audit: accounts with NO role will be refused (403) on every permission-gated route -- "+
+		"assign one on the Users page, or add them to permissions-seed.json. This includes service accounts "+
+		"(e.g. the Discord bot), which fail silently from the outside.",
+		"count", len(names), "accounts", strings.Join(names, ", "))
 }

@@ -9,7 +9,12 @@ import (
 	"github.com/lomokwa/mc-manager/types"
 )
 
-func TestListPlayersHandler_MissingUserCache(t *testing.T) {
+// This test previously asserted a 500 for a missing usercache.json. That is
+// the behaviour this change reverses: a server nobody has joined yet has no
+// usercache.json, and answering "the whole thing is broken" took down the
+// panel's Players page and the Discord bot's status line at once, over a file
+// whose absence is completely normal. Now it's an empty list.
+func TestListPlayersHandler_MissingUserCacheIsAnEmptyList(t *testing.T) {
 	setupServerDir(t)
 
 	r := newTestRouter()
@@ -19,16 +24,16 @@ func TestListPlayersHandler_MissingUserCache(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
 	}
 
 	var resp types.APIResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Success {
-		t.Error("expected success=false")
+	if !resp.Success {
+		t.Error("expected success=true")
 	}
 }
 

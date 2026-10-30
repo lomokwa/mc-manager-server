@@ -181,11 +181,16 @@ func newRouter() *gin.Engine {
 	admin := r.Group("/api/admin", middleware.ValidateAPIKeyOrJWT())
 	admin.POST("/invitations", handlers.CreateInvitationHandler)
 
+	// ~5 requests/minute per IP, burst of 5
+	forgotLimiter := middleware.NewRateLimiter(5.0/60, 5)
+	loginLimiter := middleware.NewRateLimiter(10.0/60, 10)
+
 	// Public Routes
 	r.GET("/api/invitations/:token", handlers.ValidateInvitationHandler)
 	r.POST("/api/register", handlers.RegisterHandler)
-	r.POST("/api/login", handlers.LoginHandler)
-	r.POST("/api/forgot-password", handlers.ForgotPasswordHandler)
+	r.POST("/api/login", loginLimiter.Middleware(), handlers.LoginHandler)
+	r.POST("/api/forgot-password", forgotLimiter.Middleware(), handlers.ForgotPasswordHandler)
+	r.POST("/api/reset-password", handlers.ResetPasswordHandler)
 
 	// Profile pictures: served statically and unauthenticated, like any other
 	// avatar image (a browser <img> tag can't attach an Authorization header

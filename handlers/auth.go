@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -32,4 +33,23 @@ func ForgotPasswordHandler(c *gin.Context) {
 		Success: true,
 		Data:    gin.H{"message": "If that account exists, we've sent a password reset email."},
 	})
+}
+
+func ResetPasswordHandler(c *gin.Context) {
+	var req types.ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "token and password are required"})
+		return
+	}
+
+	err := services.ResetPassword(req)
+	switch {
+	case err == nil:
+		c.JSON(http.StatusOK, types.APIResponse{Success: true})
+	case errors.Is(err, services.ErrInvalidToken):
+		c.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "invalid or expired reset link"})
+	default:
+		slog.Error("reset password failed", "err", err)
+		c.JSON(http.StatusInternalServerError, types.APIResponse{Success: false, Error: "failed to reset password"})
+	}
 }

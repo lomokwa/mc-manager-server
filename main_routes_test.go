@@ -197,13 +197,35 @@ func TestNamespacedRoute_UnknownServerID_404s(t *testing.T) {
 	}
 }
 
-// TestServersListRoute_NoExtraPermissionRequired proves GET /api/servers
-// needs nothing beyond a valid JWT -- same gate as GET /api/status -- by
-// reaching it with a user who has NO role assigned at all (deny-by-default
-// per services/permissions.go's EffectivePermissions). If this route were
-// accidentally gated behind a specific permission, this user would get 403
-// instead of 200.
-func TestServersListRoute_NoExtraPermissionRequired(t *testing.T) {
+// GET /api/servers is gated on PermServersView, which every built-in role
+// holds. That combination is the whole point, so both halves are asserted:
+// nobody who has a role loses the page, and an account with no role at all
+// doesn't get to read it just because this one route was never gated.
+//
+// The "every role keeps it" half is the one that matters most -- gating a
+// route that used to be JWT-only is exactly how a security tidy-up turns into
+// a regression for Moderators, Operators and Viewers.
+func TestServersListRoute_EveryBuiltinRoleKeepsIt(t *testing.T) {
+	setupTestDB(t)
+	setupServerDir(t)
+	bootTestRegistry(t)
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	if err := services.EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	r := newRouter()
+
+	for _, role := range types.BuiltinRoles {
+		token := newTestUserToken(t, "user-"+role.Name, role.Name)
+		w := doRequest(r, http.MethodGet, "/api/servers", token)
+		if w.Code != http.StatusOK {
+			t.Errorf("role %q must still be able to list servers, got %d, body=%s", role.Name, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestServersListRoute_DeniedWithoutARole(t *testing.T) {
 	setupTestDB(t)
 	setupServerDir(t)
 	bootTestRegistry(t)
@@ -213,8 +235,8 @@ func TestServersListRoute_NoExtraPermissionRequired(t *testing.T) {
 	r := newRouter()
 
 	w := doRequest(r, http.MethodGet, "/api/servers", token)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for a no-role authenticated user, got %d, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an account with no role, got %d, body=%s", w.Code, w.Body.String())
 	}
 }
 

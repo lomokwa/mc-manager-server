@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/lomokwa/mc-manager/db"
@@ -53,15 +54,25 @@ func TestEnsureBuiltinRoles_CreatesAllFive(t *testing.T) {
 	}
 }
 
-func TestEnsureBuiltinRoles_IdempotentAndPreservesEdits(t *testing.T) {
+// A system role's permission list is owned by types.BuiltinRoles, and every
+// boot re-asserts it. This test used to assert the opposite -- that a row which
+// had drifted from the code was left alone -- but it produced the drift with a
+// raw UPDATE, and no route in the product can do that: GET /api/roles is
+// read-only and the two writable role endpoints assign a role to a user or set
+// per-user overrides. So the preserved "edit" was unreachable in practice,
+// while the cost of preserving it was severe and silent: see the regression
+// test below.
+//
+// If hand-editable roles ever ship, they need their own storage or an
+// explicit "customised" flag -- not a seeder that quietly stops seeding.
+func TestEnsureBuiltinRoles_ReassertsTheCodesListOnEveryBoot(t *testing.T) {
 	setupTestDB(t)
 
 	if err := EnsureBuiltinRoles(); err != nil {
 		t.Fatalf("first call: expected no error, got %v", err)
 	}
-	// Simulate an admin having hand-tuned a built-in role's permissions.
 	if _, err := db.DB.Exec(`UPDATE roles SET permissions = '["console.read"]' WHERE name = 'Viewer'`); err != nil {
-		t.Fatalf("failed to hand-edit role: %v", err)
+		t.Fatalf("failed to drift the role: %v", err)
 	}
 
 	if err := EnsureBuiltinRoles(); err != nil {
@@ -72,8 +83,181 @@ func TestEnsureBuiltinRoles_IdempotentAndPreservesEdits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load Viewer role: %v", err)
 	}
-	if len(perms) != 1 || perms[0] != types.PermConsoleRead {
-		t.Errorf("expected the hand-edit to survive a second EnsureBuiltinRoles call, got %v", perms)
+	var want []types.Permission
+	for _, r := range types.BuiltinRoles {
+		if r.Name == "Viewer" {
+			want = r.Permissions
+		}
+	}
+	if len(perms) != len(want) {
+		t.Fatalf("expected the row to be restored to the code's %d permissions, got %d: %v", len(want), len(perms), perms)
+	}
+}
+
+// The bug this guards against: with ON CONFLICT DO NOTHING, a permission added
+// to the schema never reached an already-seeded role, so the feature it gated
+// was invisible to everyone -- including the Owner -- on every existing
+// install, with nothing logged. Adding a permission has to be enough.
+func TestEnsureBuiltinRoles_ANewPermissionReachesAnAlreadySeededRole(t *testing.T) {
+	setupTestDB(t)
+
+	// Seed as an older build would have: Viewer exists, without the newer
+	// overview.view that types.BuiltinRoles now grants it.
+	if _, err := db.DB.Exec(
+		`INSERT INTO roles (name, permissions, is_system) VALUES ('Viewer', '["console.read"]', 1)`,
+	); err != nil {
+		t.Fatalf("failed to seed the pre-upgrade row: %v", err)
+	}
+
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	_, perms, _, err := GetRoleByName("Viewer")
+	if err != nil {
+		t.Fatalf("failed to load Viewer role: %v", err)
+	}
+	found := false
+	for _, p := range perms {
+		if p == types.PermOverviewView {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a permission added to the schema must reach an existing install's role, got %v", perms)
+	}
+}
+
+// Full rehearsal of what happens to the LIVE database on the deploy that
+// carries this change: seed every role exactly as the pre-change build left
+// them, boot, and check both directions. Roles must gain the new permissions
+// (otherwise the new tabs are dead for everyone) and must lose none (otherwise
+// this "security tidy-up" quietly takes access away from real people).
+func TestEnsureBuiltinRoles_UpgradeFromThePreviousBuildGrantsAndTakesNothing(t *testing.T) {
+	setupTestDB(t)
+
+	// The role rows as the previous build seeded them, verbatim.
+	previous := map[string][]types.Permission{
+		"Owner": {
+			types.PermServerStart, types.PermServerStop,
+			types.PermConsoleRead, types.PermConsoleChat, types.PermConsoleCommands,
+			types.PermFilesRead, types.PermFilesUpload, types.PermFilesEdit, types.PermFilesDelete,
+			types.PermBackupsView, types.PermBackupsCreate, types.PermBackupsDownload,
+			types.PermBackupsDelete, types.PermBackupsRestore,
+			types.PermSettingsView, types.PermSettingsEdit,
+			types.PermPerformanceView, types.PermPerformanceReport,
+			types.PermPlayersView, types.PermPlayersModerate,
+			types.PermAdminManageUsers, types.PermAdminManageRoles,
+		},
+		"Moderator": {
+			types.PermConsoleRead, types.PermConsoleChat, types.PermConsoleCommands,
+			types.PermPlayersView, types.PermPlayersModerate,
+		},
+		"Operator": {
+			types.PermServerStart, types.PermServerStop,
+			types.PermConsoleRead, types.PermConsoleChat,
+			types.PermPlayersView,
+		},
+		"Viewer": {
+			types.PermConsoleRead, types.PermPerformanceView, types.PermPlayersView,
+		},
+	}
+	previous["Admin"] = previous["Owner"]
+
+	for name, perms := range previous {
+		blob, err := json.Marshal(perms)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		if _, err := db.DB.Exec(
+			`INSERT INTO roles (name, permissions, is_system) VALUES (?, ?, 1)`, name, string(blob),
+		); err != nil {
+			t.Fatalf("seed pre-upgrade role %q: %v", name, err)
+		}
+	}
+
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("upgrade boot failed: %v", err)
+	}
+
+	for name, before := range previous {
+		_, after, _, err := GetRoleByName(name)
+		if err != nil {
+			t.Fatalf("load %q after upgrade: %v", name, err)
+		}
+		have := make(map[types.Permission]bool, len(after))
+		for _, p := range after {
+			have[p] = true
+		}
+		for _, p := range before {
+			if !have[p] {
+				t.Errorf("role %q LOST %q across the upgrade", name, p)
+			}
+		}
+	}
+
+	// And the four new surfaces actually arrive where they were meant to.
+	for _, want := range []struct {
+		role string
+		perm types.Permission
+	}{
+		{"Owner", types.PermAutomationsManage},
+		{"Owner", types.PermActivityView},
+		{"Admin", types.PermServersManage},
+		{"Moderator", types.PermActivityView},
+		{"Viewer", types.PermServersView},
+		{"Viewer", types.PermOverviewView},
+	} {
+		_, after, _, err := GetRoleByName(want.role)
+		if err != nil {
+			t.Fatalf("load %q: %v", want.role, err)
+		}
+		found := false
+		for _, p := range after {
+			if p == want.perm {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("role %q did not gain %q on upgrade", want.role, want.perm)
+		}
+	}
+
+	// Viewer must NOT quietly pick up the powerful ones.
+	_, viewer, _, err := GetRoleByName("Viewer")
+	if err != nil {
+		t.Fatalf("load Viewer: %v", err)
+	}
+	for _, p := range viewer {
+		if p == types.PermAutomationsManage || p == types.PermServersManage || p == types.PermActivityView {
+			t.Errorf("Viewer must not gain %q", p)
+		}
+	}
+}
+
+// The thing that genuinely must survive re-seeding: a per-user override. Those
+// live on user_roles, not on the role, and are applied on top in
+// EffectivePermissions -- so someone explicitly denied a permission keeps that
+// denial even as their role gains it.
+func TestEnsureBuiltinRoles_PerUserOverridesSurviveReseeding(t *testing.T) {
+	setupTestDB(t)
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("failed to seed roles: %v", err)
+	}
+	userID := insertTestUser(t, "denied")
+	if err := SetUserRole(userID, "Viewer"); err != nil {
+		t.Fatalf("failed to assign role: %v", err)
+	}
+	if err := SetUserOverrides(userID, map[types.Permission]bool{types.PermConsoleRead: false}); err != nil {
+		t.Fatalf("failed to set override: %v", err)
+	}
+
+	if err := EnsureBuiltinRoles(); err != nil {
+		t.Fatalf("re-seed: expected no error, got %v", err)
+	}
+
+	if HasPermission(userID, types.PermConsoleRead) {
+		t.Error("an explicit per-user deny must survive the role being re-seeded")
 	}
 }
 

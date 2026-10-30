@@ -85,6 +85,7 @@ func ConsoleHandler(c *gin.Context) {
 	// Read once, before the upgrade -- the route's RequirePermission(console.read)
 	// already confirmed a JWT is present, so this is always populated here.
 	userID, _ := middleware.UserIDFromContext(c)
+	username, _ := middleware.UsernameFromContext(c)
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -137,6 +138,25 @@ func ConsoleHandler(c *gin.Context) {
 				default:
 				}
 				continue
+			}
+			// The audit trail's own headline question is "who banned this
+			// player?", and bans never touch REST -- the player panel sends
+			// them here, as console commands. Recording only mutations at the
+			// HTTP layer would miss every ban, kick, op and whitelist change.
+			//
+			// Chat is skipped: "say hello" is a message, not an administrative
+			// act, and relaying every line would bury the commands under it.
+			// The command text itself is safe to store -- it is already in
+			// latest.log and in every open console.
+			if classifyConsoleInput(cmd) != types.PermConsoleChat {
+				services.RecordActivity(types.ActivityEntry{
+					UserID:   userID,
+					Username: username,
+					Category: types.ActivityConsole,
+					Action:   "ran a console command",
+					Detail:   cmd,
+					ServerID: rt.ID,
+				})
 			}
 			if err := rt.SendCommand(cmd); err != nil {
 				slog.Error("failed to send console command", "err", err)

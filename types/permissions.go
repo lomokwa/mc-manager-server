@@ -36,6 +36,16 @@ const (
 
 	PermAdminManageUsers Permission = "admin.manage_users"
 	PermAdminManageRoles Permission = "admin.manage_roles"
+
+	PermOverviewView Permission = "overview.view"
+
+	PermActivityView Permission = "activity.view"
+
+	PermAutomationsView   Permission = "automations.view"
+	PermAutomationsManage Permission = "automations.manage"
+
+	PermServersView   Permission = "servers.view"
+	PermServersManage Permission = "servers.manage"
 )
 
 // PermissionInfo is one row in the schema the client renders a permission
@@ -115,6 +125,32 @@ var PermissionSchema = []PermissionZone{
 		},
 	},
 	{
+		Key: "overview", Label: "Overview",
+		Permissions: []PermissionInfo{
+			{PermOverviewView, "View overview", "See the at-a-glance dashboard. Each tile still respects the permission for the thing it summarises."},
+		},
+	},
+	{
+		Key: "automations", Label: "Automations",
+		Permissions: []PermissionInfo{
+			{PermAutomationsView, "View automations", "See the automation rules and their Discord destinations."},
+			{PermAutomationsManage, "Manage automations", "Create, edit, enable and delete rules. A rule can run server commands, so this is as powerful as console access."},
+		},
+	},
+	{
+		Key: "activity", Label: "Activity",
+		Permissions: []PermissionInfo{
+			{PermActivityView, "View activity", "See the audit trail of who did what on the panel."},
+		},
+	},
+	{
+		Key: "servers", Label: "Servers",
+		Permissions: []PermissionInfo{
+			{PermServersView, "View servers", "See the list of managed servers and switch between them."},
+			{PermServersManage, "Manage servers", "Add, rename and remove servers from the registry."},
+		},
+	},
+	{
 		Key: "administration", Label: "Administration",
 		Permissions: []PermissionInfo{
 			{PermAdminManageUsers, "Manage users", "Invite and remove website accounts."},
@@ -158,16 +194,31 @@ type RoleInfo struct {
 var BuiltinRoles = []RoleDefault{
 	{Name: "Owner", Permissions: AllPermissions()},
 	{Name: "Admin", Permissions: AllPermissions()},
+	// PermServersView and PermOverviewView are on EVERY role below on purpose.
+	// GET /api/servers has always been JWT-only, so every signed-in account can
+	// already see the server list today; gating it now without granting it back
+	// would take a page away from Moderators, Operators and Viewers, which is a
+	// regression dressed up as a security improvement. Overview is the same
+	// shape -- it only aggregates things the viewer can already see, and each
+	// tile still resolves its own permission.
+	//
+	// The genuinely new powers are narrower: PermActivityView exposes who did
+	// what, and PermAutomationsManage is effectively remote command execution
+	// (a rule can run console commands), so that one stays with Owner/Admin.
 	{Name: "Moderator", Permissions: []Permission{
 		PermConsoleRead, PermConsoleChat, PermConsoleCommands,
 		PermPlayersView, PermPlayersModerate,
+		PermOverviewView, PermServersView,
+		PermActivityView, PermAutomationsView,
 	}},
 	{Name: "Operator", Permissions: []Permission{
 		PermServerStart, PermServerStop,
 		PermConsoleRead, PermConsoleChat,
 		PermPlayersView,
+		PermOverviewView, PermServersView,
 	}},
 	{Name: "Viewer", Permissions: []Permission{
 		PermConsoleRead, PermPerformanceView, PermPlayersView,
+		PermOverviewView, PermServersView,
 	}},
 }

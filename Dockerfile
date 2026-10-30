@@ -6,7 +6,7 @@
 # the full Oracle JDK on every build).
 
 # ---- Build stage: full Go toolchain ----
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26.10-bookworm AS build
 WORKDIR /app
 
 COPY go.mod go.sum ./

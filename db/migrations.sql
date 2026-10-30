@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS invitations (
   used_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS reset_password (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash VARCHAR(64) UNIQUE NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP
+);
+
 -- Single-row table: there is one backup schedule per server instance.
 CREATE TABLE IF NOT EXISTS backup_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
